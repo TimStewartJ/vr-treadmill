@@ -10,6 +10,14 @@ from .settings import AppSettings, load_settings, save_settings
 from .startup import current_startup_command, set_startup_enabled
 
 
+TUNING_PRESETS = {
+    "Comfort": TreadmillConfig(sensitivity=0.0025, decay=0.82, deadzone=4, update_hz=100),
+    "Balanced": TreadmillConfig(sensitivity=0.0030, decay=0.85, deadzone=2, update_hz=100),
+    "Faster": TreadmillConfig(sensitivity=0.0045, decay=0.85, deadzone=2, update_hz=120),
+    "Snappy": TreadmillConfig(sensitivity=0.0040, decay=0.70, deadzone=2, update_hz=120),
+}
+
+
 class TreadmillApp:
     def __init__(self, root: tk.Tk, settings: AppSettings | None = None) -> None:
         self.root = root
@@ -20,10 +28,14 @@ class TreadmillApp:
         self.exiting = False
 
         defaults = self.settings.treadmill
-        self.sensitivity = tk.StringVar(value=str(defaults.sensitivity))
-        self.decay = tk.StringVar(value=str(defaults.decay))
-        self.deadzone = tk.StringVar(value=str(defaults.deadzone))
-        self.update_hz = tk.StringVar(value=str(defaults.update_hz))
+        self.sensitivity = tk.DoubleVar(value=defaults.sensitivity)
+        self.decay = tk.DoubleVar(value=defaults.decay)
+        self.deadzone = tk.DoubleVar(value=defaults.deadzone)
+        self.update_hz = tk.DoubleVar(value=defaults.update_hz)
+        self.sensitivity_value = tk.StringVar()
+        self.decay_value = tk.StringVar()
+        self.deadzone_value = tk.StringVar()
+        self.update_hz_value = tk.StringVar()
         self.start_with_windows = tk.BooleanVar(value=self.settings.start_with_windows)
         self.start_minimized = tk.BooleanVar(value=self.settings.start_minimized)
         self.driver_status_text = tk.StringVar(value="Driver Status: checking...")
@@ -44,12 +56,13 @@ class TreadmillApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        ttk.Label(frame, text="Mouse treadmill to Xbox left-stick Y").grid(
+        ttk.Label(frame, text="VR Treadmill turns forward/back treadmill motion into Xbox left-stick movement.").grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
 
         driver_frame = ttk.LabelFrame(frame, text="Driver")
         driver_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        driver_frame.columnconfigure(1, weight=1)
         ttk.Label(driver_frame, textvariable=self.driver_status_text).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4)
         )
@@ -60,47 +73,124 @@ class TreadmillApp:
             row=1, column=1, sticky="w", padx=(4, 8), pady=(0, 8)
         )
 
-        self._add_entry(frame, "Sensitivity", self.sensitivity, 2)
-        self._add_entry(frame, "Decay", self.decay, 3)
-        self._add_entry(frame, "Deadzone", self.deadzone, 4)
-        self._add_entry(frame, "Update Hz", self.update_hz, 5)
+        tuning_frame = ttk.LabelFrame(frame, text="Tuning")
+        tuning_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        tuning_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            tuning_frame,
+            text="Start with Balanced. If movement feels too slow, try Faster. If it drifts or feels jumpy, try Comfort.",
+            wraplength=420,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(6, 4))
+
+        preset_frame = ttk.Frame(tuning_frame)
+        preset_frame.grid(row=1, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 8))
+        ttk.Label(preset_frame, text="Quick presets:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        for column, preset_name in enumerate(TUNING_PRESETS, start=1):
+            ttk.Button(
+                preset_frame,
+                text=preset_name,
+                command=lambda name=preset_name: self.apply_preset(name),
+            ).grid(row=0, column=column, padx=(0, 6))
+
+        self._add_slider(
+            tuning_frame,
+            "Movement speed",
+            "Higher means less treadmill/mouse movement is needed to push the virtual stick forward.",
+            self.sensitivity,
+            self.sensitivity_value,
+            2,
+            0.001,
+            0.010,
+        )
+        self._add_slider(
+            tuning_frame,
+            "Stop smoothness",
+            "Higher coasts more smoothly; lower recenters faster when you stop walking.",
+            self.decay,
+            self.decay_value,
+            4,
+            0.50,
+            0.95,
+        )
+        self._add_slider(
+            tuning_frame,
+            "Noise filter",
+            "Higher ignores tiny accidental movements; lower makes very slow walking easier to detect.",
+            self.deadzone,
+            self.deadzone_value,
+            6,
+            0,
+            10,
+        )
+        self._add_slider(
+            tuning_frame,
+            "Update rate",
+            "How often the virtual controller is updated. 100 Hz is usually enough.",
+            self.update_hz,
+            self.update_hz_value,
+            8,
+            30,
+            200,
+        )
 
         ttk.Checkbutton(
             frame,
             text="Start with Windows",
             variable=self.start_with_windows,
             command=self._on_start_with_windows_changed,
-        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
         ttk.Checkbutton(
             frame,
             text="Start minimized to tray",
             variable=self.start_minimized,
             command=self._on_start_minimized_changed,
-        ).grid(row=7, column=0, columnspan=2, sticky="w")
+        ).grid(row=4, column=0, columnspan=2, sticky="w")
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        self.start_button = ttk.Button(buttons, text="Start capture", command=self.start)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.start_button = ttk.Button(buttons, text="Start treadmill capture", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop, state="disabled")
         self.hide_button = ttk.Button(buttons, text="Hide to tray", command=self.hide_to_tray)
         self.start_button.grid(row=0, column=0, padx=(0, 8))
         self.stop_button.grid(row=0, column=1, padx=(0, 8))
         self.hide_button.grid(row=0, column=2)
 
-        ttk.Label(frame, textvariable=self.status_text).grid(row=9, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Label(frame, textvariable=self.stick_text).grid(row=10, column=0, columnspan=2, sticky="w")
-        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=11, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=self.status_text).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.stick_text).grid(row=7, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=8, column=0, columnspan=2, sticky="w")
 
         self.meter = tk.Canvas(frame, width=280, height=28, background="white", highlightthickness=1)
-        self.meter.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.meter.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
+        self._update_tuning_labels()
         self.refresh_driver_status()
 
-    @staticmethod
-    def _add_entry(parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(parent, textvariable=variable, width=12).grid(row=row, column=1, sticky="e", pady=(8, 0))
+    def _add_slider(
+        self,
+        parent: ttk.Frame,
+        label: str,
+        description: str,
+        variable: tk.DoubleVar,
+        value_label: tk.StringVar,
+        row: int,
+        from_: float,
+        to: float,
+    ) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="nw", padx=8, pady=(8, 0))
+        ttk.Scale(
+            parent,
+            variable=variable,
+            from_=from_,
+            to=to,
+            command=lambda _value: self._on_tuning_changed(),
+        ).grid(row=row, column=1, sticky="ew", padx=(8, 8), pady=(8, 0))
+        ttk.Label(parent, textvariable=value_label, width=12).grid(row=row, column=2, sticky="e", padx=(0, 8), pady=(8, 0))
+        ttk.Label(parent, text=description, wraplength=420, foreground="#555").grid(
+            row=row + 1, column=0, columnspan=3, sticky="w", padx=8
+        )
 
     def _start_hotkey_listener(self) -> None:
         try:
@@ -215,6 +305,12 @@ class TreadmillApp:
             "Open this URL manually: https://github.com/ViGEm/ViGEmBus/releases",
         )
 
+    def apply_preset(self, name: str) -> None:
+        config = TUNING_PRESETS[name]
+        self._set_config_controls(config)
+        self._on_tuning_changed()
+        self.status_text.set(f"{name} preset applied")
+
     def _on_start_with_windows_changed(self) -> None:
         enabled = self.start_with_windows.get()
         previous_start_with_windows = self.settings.start_with_windows
@@ -247,10 +343,10 @@ class TreadmillApp:
 
     def _read_config(self) -> TreadmillConfig:
         return TreadmillConfig(
-            sensitivity=float(self.sensitivity.get()),
-            decay=float(self.decay.get()),
-            deadzone=int(self.deadzone.get()),
-            update_hz=int(self.update_hz.get()),
+            sensitivity=round(float(self.sensitivity.get()), 4),
+            decay=round(float(self.decay.get()), 2),
+            deadzone=int(round(float(self.deadzone.get()))),
+            update_hz=int(round(float(self.update_hz.get()))),
         )
 
     def _save_settings(self) -> None:
@@ -261,6 +357,33 @@ class TreadmillApp:
         self.settings.start_with_windows = self.start_with_windows.get()
         self.settings.start_minimized = self.start_minimized.get()
         save_settings(self.settings)
+
+    def _set_config_controls(self, config: TreadmillConfig) -> None:
+        self.sensitivity.set(config.sensitivity)
+        self.decay.set(config.decay)
+        self.deadzone.set(config.deadzone)
+        self.update_hz.set(config.update_hz)
+        self._update_tuning_labels()
+
+    def _on_tuning_changed(self) -> None:
+        self._update_tuning_labels()
+        try:
+            config = self._read_config()
+            self.settings.treadmill = config
+            if self.engine.is_running:
+                self.engine.update_config(config)
+                self.status_text.set("Tuning updated live")
+            else:
+                self.status_text.set("Tuning saved - start capture to test")
+            self._save_settings()
+        except Exception as exc:
+            self.status_text.set(f"Tuning error: {exc}")
+
+    def _update_tuning_labels(self) -> None:
+        self.sensitivity_value.set(f"{float(self.sensitivity.get()):.4f}")
+        self.decay_value.set(f"{float(self.decay.get()):.2f}")
+        self.deadzone_value.set(f"{int(round(float(self.deadzone.get())))} px")
+        self.update_hz_value.set(f"{int(round(float(self.update_hz.get())))} Hz")
 
     def _refresh(self) -> None:
         status = self.engine.status()
