@@ -1,4 +1,4 @@
 pillow>=10.0
 pystray>=0.19.5
 pynput>=1.8.2
-vgamepad>=0.1.0
+vgamepad @ git+https://github.com/yannbouteiller/vgamepad@v0.1.3

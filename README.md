@@ -116,6 +116,8 @@ dist\VRTreadmill-Setup.exe
 
 The installer is per-user, does not require admin rights, and removes the app's Windows startup registry value on uninstall. ViGEmBus remains an external prerequisite.
 
+The build uses the upstream `vgamepad` `v0.1.3` GitHub tag because the PyPI `0.1.0` package prompts for ViGEmBus driver installation during Windows dependency installation, which is not suitable for automated CI builds.
+
 ## Automated builds
 
 Every push to `main` runs the Windows build workflow. The workflow:
