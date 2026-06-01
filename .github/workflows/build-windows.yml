@@ -2,8 +2,12 @@ name: Build Windows app
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -43,9 +47,38 @@ jobs:
         with:
           name: VRTreadmill-exe
           path: dist/VRTreadmill.exe
+          if-no-files-found: error
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: VRTreadmill-installer
           path: dist/VRTreadmill-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish latest release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release delete latest --yes --cleanup-tag 2>$null || $true
+          $notes = @"
+          Latest automated Windows build from main.
+
+          Recommended download:
+          - VRTreadmill-Setup.exe
+
+          Portable option:
+          - VRTreadmill.exe
+
+          ViGEmBus is still required for virtual Xbox controller support. If the app says the driver is missing, use the Driver section in the app to open the official driver download page.
+          "@
+          gh release create latest `
+            dist/VRTreadmill-Setup.exe `
+            dist/VRTreadmill.exe `
+            --target "${{ github.sha }}" `
+            --title "Latest VR Treadmill build" `
+            --notes $notes `
+            --prerelease

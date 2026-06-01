@@ -1,6 +1,40 @@
 # VR Treadmill
 
-Windows Python app for turning treadmill mouse movement into a virtual Xbox 360 left-stick input.
+[![Build Windows app](https://github.com/TimStewartJ/vr-treadmill/actions/workflows/build-windows.yml/badge.svg)](https://github.com/TimStewartJ/vr-treadmill/actions/workflows/build-windows.yml)
+
+Turn treadmill mouse movement into a virtual Xbox 360 left stick for Windows VR games.
+
+VR Treadmill is for setups where a treadmill or mouse-like sensor reports forward/back movement. The app converts that movement into Xbox left-stick Y input through ViGEmBus, so games and SteamVR can see it as a normal Xbox controller.
+
+## Download and install
+
+Most users do **not** need Python.
+
+1. Open the [latest VR Treadmill build](https://github.com/TimStewartJ/vr-treadmill/releases/tag/latest).
+2. Download **`VRTreadmill-Setup.exe`**.
+3. Run the installer.
+4. Open **VR Treadmill** from the Start menu.
+5. If the app says ViGEmBus is missing, click **Install/Open ViGEmBus Driver**, install the driver, then reopen VR Treadmill.
+
+Advanced users can download **`VRTreadmill.exe`** instead for a portable single-file app.
+
+## What it does at a glance
+
+- Creates a virtual Xbox 360 controller.
+- Converts treadmill/mouse forward/back movement into left-stick forward/back movement.
+- Gives you beginner-friendly tuning presets.
+- Runs from the system tray if you want it out of the way.
+- Can start with Windows and launch minimized.
+- Does **not** require FreePIE, vJoy, x360ce, or Python for normal users.
+
+## Quick start
+
+1. Confirm the **Driver** section says ViGEmBus is installed/running.
+2. Leave tuning on **Balanced**.
+3. Click **Start treadmill capture**.
+4. Check that the stick meter moves when you walk/move the treadmill sensor.
+5. Open SteamVR/controller bindings and bind the Xbox/Gamepad left stick to movement for your game.
+6. Press **F8** any time as an emergency stop.
 
 ## Current approach
 
@@ -12,7 +46,7 @@ Windows Python app for turning treadmill mouse movement into a virtual Xbox 360 
 
 This works only when SteamVR and the target game accept a normal Xbox/XInput controller as an input source.
 
-## Setup
+## Developer setup
 
 ```powershell
 cd E:\vr-treadmill
@@ -21,7 +55,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-## Run the small Windows app
+## Run from source
 
 ```powershell
 .\.venv\Scripts\vrtread-gui.exe
@@ -81,6 +115,18 @@ dist\VRTreadmill-Setup.exe
 ```
 
 The installer is per-user, does not require admin rights, and removes the app's Windows startup registry value on uninstall. ViGEmBus remains an external prerequisite.
+
+## Automated builds
+
+Every push to `main` runs the Windows build workflow. The workflow:
+
+1. Runs the unit tests.
+2. Builds `VRTreadmill.exe`.
+3. Builds `VRTreadmill-Setup.exe`.
+4. Uploads both as workflow artifacts.
+5. Updates the [`latest` GitHub Release](https://github.com/TimStewartJ/vr-treadmill/releases/tag/latest) with both downloads.
+
+Use **`VRTreadmill-Setup.exe`** as the recommended end-user download.
 
 ## Known limitations
 
