@@ -29,6 +29,8 @@ python -m venv .venv
 
 The app has Start/Stop controls, a live stick meter, and tunable sensitivity/decay/deadzone/update-rate values. Press **F8** as an emergency stop while capture mode is active.
 
+Closing or minimizing the window hides it to the system tray. Use the tray icon to show the window, start/stop capture, or fully exit.
+
 ## Run the CLI
 
 ```powershell
@@ -48,6 +50,5 @@ Press **Ctrl+C** to stop.
 1. Replace cursor recentering with Raw Input or a safer explicit capture mode.
 2. Add calibration for walk, jog, and sprint speeds.
 3. Save per-game profiles under `%APPDATA%\vrtread`.
-4. Add a tray icon and clearer controller/ViGEmBus diagnostics.
+4. Add clearer controller/ViGEmBus diagnostics.
 5. Package as a standalone Windows `.exe` with PyInstaller.
-

@@ -8,11 +8,12 @@ from .engine import TreadmillConfig, TreadmillEngine
 
 
 def build_parser() -> argparse.ArgumentParser:
+    defaults = TreadmillConfig()
     parser = argparse.ArgumentParser(description="Run mouse treadmill to Xbox left-stick input.")
-    parser.add_argument("--sensitivity", type=float, default=TreadmillConfig.sensitivity)
-    parser.add_argument("--decay", type=float, default=TreadmillConfig.decay)
-    parser.add_argument("--deadzone", type=int, default=TreadmillConfig.deadzone)
-    parser.add_argument("--update-hz", type=int, default=TreadmillConfig.update_hz)
+    parser.add_argument("--sensitivity", type=float, default=defaults.sensitivity)
+    parser.add_argument("--decay", type=float, default=defaults.decay)
+    parser.add_argument("--deadzone", type=int, default=defaults.deadzone)
+    parser.add_argument("--update-hz", type=int, default=defaults.update_hz)
     return parser
 
 
@@ -51,4 +52,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
