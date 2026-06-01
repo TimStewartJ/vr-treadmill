@@ -8,6 +8,7 @@ if (-not (Test-Path $python)) {
 
 Push-Location $repoRoot
 try {
+    $env:VGAMEPAD_SKIP_VIGEMBUS_INSTALL = 'true'
     & $python -m pip install -e ".[dev]"
     if ($LASTEXITCODE -ne 0) {
         throw "Dependency installation failed with exit code $LASTEXITCODE."

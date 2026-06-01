@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  VGAMEPAD_SKIP_VIGEMBUS_INSTALL: "true"
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -63,7 +66,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh release delete latest --yes --cleanup-tag 2>$null || $true
+          gh release delete latest --yes --cleanup-tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No previous latest release to delete."
+          }
           $notes = @"
           Latest automated Windows build from main.
 
