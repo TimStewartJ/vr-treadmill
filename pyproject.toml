@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vr-treadmill"
+version = "0.1.0"
+description = "Mouse treadmill to virtual Xbox 360 controller input for Windows VR games"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pynput>=1.8.2",
+  "vgamepad>=0.1.0; platform_system == 'Windows'",
+]
+
+[project.scripts]
+vrtread-cli = "vrtread.cli:main"
+vrtread-gui = "vrtread.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
