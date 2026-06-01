@@ -1,24 +1,30 @@
 from __future__ import annotations
 
+import argparse
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .engine import TreadmillConfig, TreadmillEngine
+from .settings import AppSettings, load_settings, save_settings
+from .startup import current_startup_command, set_startup_enabled
 
 
 class TreadmillApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, settings: AppSettings | None = None) -> None:
         self.root = root
         self.engine = TreadmillEngine()
+        self.settings = settings or load_settings()
         self.hotkeys = None
         self.tray_icon = None
         self.exiting = False
 
-        defaults = TreadmillConfig()
+        defaults = self.settings.treadmill
         self.sensitivity = tk.StringVar(value=str(defaults.sensitivity))
         self.decay = tk.StringVar(value=str(defaults.decay))
         self.deadzone = tk.StringVar(value=str(defaults.deadzone))
         self.update_hz = tk.StringVar(value=str(defaults.update_hz))
+        self.start_with_windows = tk.BooleanVar(value=self.settings.start_with_windows)
+        self.start_minimized = tk.BooleanVar(value=self.settings.start_minimized)
         self.status_text = tk.StringVar(value="Stopped")
         self.stick_text = tk.StringVar(value="Stick Y: +0.000")
 
@@ -45,8 +51,22 @@ class TreadmillApp:
         self._add_entry(frame, "Deadzone", self.deadzone, 3)
         self._add_entry(frame, "Update Hz", self.update_hz, 4)
 
+        ttk.Checkbutton(
+            frame,
+            text="Start with Windows",
+            variable=self.start_with_windows,
+            command=self._on_start_with_windows_changed,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        ttk.Checkbutton(
+            frame,
+            text="Start minimized to tray",
+            variable=self.start_minimized,
+            command=self._on_start_minimized_changed,
+        ).grid(row=6, column=0, columnspan=2, sticky="w")
+
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.start_button = ttk.Button(buttons, text="Start capture", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop, state="disabled")
         self.hide_button = ttk.Button(buttons, text="Hide to tray", command=self.hide_to_tray)
@@ -54,12 +74,12 @@ class TreadmillApp:
         self.stop_button.grid(row=0, column=1, padx=(0, 8))
         self.hide_button.grid(row=0, column=2)
 
-        ttk.Label(frame, textvariable=self.status_text).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Label(frame, textvariable=self.stick_text).grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=self.status_text).grid(row=8, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.stick_text).grid(row=9, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=10, column=0, columnspan=2, sticky="w")
 
         self.meter = tk.Canvas(frame, width=280, height=28, background="white", highlightthickness=1)
-        self.meter.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.meter.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
     @staticmethod
     def _add_entry(parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
@@ -104,7 +124,10 @@ class TreadmillApp:
 
     def start(self) -> None:
         try:
-            self.engine.start(self._read_config())
+            config = self._read_config()
+            self.settings.treadmill = config
+            self._save_settings()
+            self.engine.start(config)
         except Exception as exc:
             messagebox.showerror("Could not start VR Treadmill", str(exc))
             return
@@ -133,6 +156,7 @@ class TreadmillApp:
 
     def close(self) -> None:
         self.exiting = True
+        self._save_settings()
         if self.hotkeys is not None:
             self.hotkeys.stop()
             self.hotkeys = None
@@ -161,6 +185,36 @@ class TreadmillApp:
     def _tray_exit(self, icon, item) -> None:
         self.root.after(0, self.close)
 
+    def _on_start_with_windows_changed(self) -> None:
+        enabled = self.start_with_windows.get()
+        previous_start_with_windows = self.settings.start_with_windows
+        previous_start_minimized = self.settings.start_minimized
+
+        try:
+            if enabled:
+                self.start_minimized.set(True)
+                set_startup_enabled(True, current_startup_command(minimized=True))
+            else:
+                set_startup_enabled(False)
+
+            self.settings.start_with_windows = enabled
+            self.settings.start_minimized = self.start_minimized.get()
+            self._save_settings()
+            self.status_text.set("Startup settings saved")
+        except Exception as exc:
+            self.start_with_windows.set(previous_start_with_windows)
+            self.start_minimized.set(previous_start_minimized)
+            messagebox.showerror("Could not update Windows startup", str(exc))
+
+    def _on_start_minimized_changed(self) -> None:
+        self.settings.start_minimized = self.start_minimized.get()
+        self._save_settings()
+        if self.start_with_windows.get() and not self.start_minimized.get():
+            self.start_with_windows.set(False)
+            self._on_start_with_windows_changed()
+        else:
+            self.status_text.set("Startup settings saved")
+
     def _read_config(self) -> TreadmillConfig:
         return TreadmillConfig(
             sensitivity=float(self.sensitivity.get()),
@@ -168,6 +222,15 @@ class TreadmillApp:
             deadzone=int(self.deadzone.get()),
             update_hz=int(self.update_hz.get()),
         )
+
+    def _save_settings(self) -> None:
+        try:
+            self.settings.treadmill = self._read_config()
+        except ValueError:
+            pass
+        self.settings.start_with_windows = self.start_with_windows.get()
+        self.settings.start_minimized = self.start_minimized.get()
+        save_settings(self.settings)
 
     def _refresh(self) -> None:
         status = self.engine.status()
@@ -195,9 +258,29 @@ class TreadmillApp:
         self.meter.create_rectangle(min(center, end), 4, max(center, end), height - 4, fill="#2b7cff")
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the VR Treadmill tray app.")
+    parser.add_argument("--minimized", action="store_true", help="Start hidden in the system tray.")
+    parser.add_argument("--show", action="store_true", help="Show the window even if Start minimized is enabled.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    settings = load_settings()
+    start_minimized = (args.minimized or settings.start_minimized) and not args.show
+
     root = tk.Tk()
-    TreadmillApp(root)
+    if start_minimized:
+        root.withdraw()
+
+    app = TreadmillApp(root, settings)
+    if start_minimized:
+        if app.tray_icon is None:
+            app.show_window()
+        else:
+            app.hide_to_tray()
+
     root.mainloop()
     return 0
 

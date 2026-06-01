@@ -19,5 +19,11 @@ dependencies = [
 vrtread-cli = "vrtread.cli:main"
 vrtread-gui = "vrtread.gui:main"
 
+[project.optional-dependencies]
+dev = [
+  "pyinstaller>=6.0",
+  "pytest>=8.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

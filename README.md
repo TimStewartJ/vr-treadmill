@@ -31,6 +31,8 @@ The app has Start/Stop controls, a live stick meter, and tunable sensitivity/dec
 
 Closing or minimizing the window hides it to the system tray. Use the tray icon to show the window, start/stop capture, or fully exit.
 
+Enable **Start with Windows** to register the app in the current user's Windows startup list. This also enables **Start minimized to tray** so boot does not open the full window. Settings are saved under `%APPDATA%\VRTreadmill\settings.json`.
+
 ## Run the CLI
 
 ```powershell
@@ -38,6 +40,34 @@ Closing or minimizing the window hides it to the system tray. Use the tray icon 
 ```
 
 Press **Ctrl+C** to stop.
+
+## Build the executable
+
+```powershell
+.\scripts\build-exe.ps1
+```
+
+The standalone app is written to:
+
+```text
+dist\VRTreadmill.exe
+```
+
+## Build the installer
+
+Install Inno Setup 6, then run:
+
+```powershell
+.\scripts\build-installer.ps1
+```
+
+The installer is written to:
+
+```text
+dist\VRTreadmill-Setup.exe
+```
+
+The installer is per-user, does not require admin rights, and removes the app's Windows startup registry value on uninstall. ViGEmBus remains an external prerequisite.
 
 ## Known limitations
 
@@ -49,6 +79,5 @@ Press **Ctrl+C** to stop.
 
 1. Replace cursor recentering with Raw Input or a safer explicit capture mode.
 2. Add calibration for walk, jog, and sprint speeds.
-3. Save per-game profiles under `%APPDATA%\vrtread`.
+3. Save per-game profiles under `%APPDATA%\VRTreadmill`.
 4. Add clearer controller/ViGEmBus diagnostics.
-5. Package as a standalone Windows `.exe` with PyInstaller.
