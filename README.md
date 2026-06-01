@@ -29,6 +29,8 @@ python -m venv .venv
 
 The app has Start/Stop controls, a live stick meter, and tunable sensitivity/decay/deadzone/update-rate values. Press **F8** as an emergency stop while capture mode is active.
 
+The **Driver** section shows whether ViGEmBus appears installed/running and includes an **Install/Open ViGEmBus Driver** button that opens the official ViGEmBus releases page.
+
 Closing or minimizing the window hides it to the system tray. Use the tray icon to show the window, start/stop capture, or fully exit.
 
 Enable **Start with Windows** to register the app in the current user's Windows startup list. This also enables **Start minimized to tray** so boot does not open the full window. Settings are saved under `%APPDATA%\VRTreadmill\settings.json`.

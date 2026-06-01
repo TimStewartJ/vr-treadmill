@@ -4,6 +4,7 @@ import argparse
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from .driver import open_vigembus_download, query_vigembus_status
 from .engine import TreadmillConfig, TreadmillEngine
 from .settings import AppSettings, load_settings, save_settings
 from .startup import current_startup_command, set_startup_enabled
@@ -25,6 +26,7 @@ class TreadmillApp:
         self.update_hz = tk.StringVar(value=str(defaults.update_hz))
         self.start_with_windows = tk.BooleanVar(value=self.settings.start_with_windows)
         self.start_minimized = tk.BooleanVar(value=self.settings.start_minimized)
+        self.driver_status_text = tk.StringVar(value="Driver Status: checking...")
         self.status_text = tk.StringVar(value="Stopped")
         self.stick_text = tk.StringVar(value="Stick Y: +0.000")
 
@@ -46,27 +48,39 @@ class TreadmillApp:
             row=0, column=0, columnspan=2, sticky="w"
         )
 
-        self._add_entry(frame, "Sensitivity", self.sensitivity, 1)
-        self._add_entry(frame, "Decay", self.decay, 2)
-        self._add_entry(frame, "Deadzone", self.deadzone, 3)
-        self._add_entry(frame, "Update Hz", self.update_hz, 4)
+        driver_frame = ttk.LabelFrame(frame, text="Driver")
+        driver_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Label(driver_frame, textvariable=self.driver_status_text).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 4)
+        )
+        ttk.Button(driver_frame, text="Refresh", command=self.refresh_driver_status).grid(
+            row=1, column=0, sticky="w", padx=(8, 4), pady=(0, 8)
+        )
+        ttk.Button(driver_frame, text="Install/Open ViGEmBus Driver", command=self.open_driver_install).grid(
+            row=1, column=1, sticky="w", padx=(4, 8), pady=(0, 8)
+        )
+
+        self._add_entry(frame, "Sensitivity", self.sensitivity, 2)
+        self._add_entry(frame, "Decay", self.decay, 3)
+        self._add_entry(frame, "Deadzone", self.deadzone, 4)
+        self._add_entry(frame, "Update Hz", self.update_hz, 5)
 
         ttk.Checkbutton(
             frame,
             text="Start with Windows",
             variable=self.start_with_windows,
             command=self._on_start_with_windows_changed,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
         ttk.Checkbutton(
             frame,
             text="Start minimized to tray",
             variable=self.start_minimized,
             command=self._on_start_minimized_changed,
-        ).grid(row=6, column=0, columnspan=2, sticky="w")
+        ).grid(row=7, column=0, columnspan=2, sticky="w")
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.start_button = ttk.Button(buttons, text="Start capture", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop, state="disabled")
         self.hide_button = ttk.Button(buttons, text="Hide to tray", command=self.hide_to_tray)
@@ -74,12 +88,14 @@ class TreadmillApp:
         self.stop_button.grid(row=0, column=1, padx=(0, 8))
         self.hide_button.grid(row=0, column=2)
 
-        ttk.Label(frame, textvariable=self.status_text).grid(row=8, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Label(frame, textvariable=self.stick_text).grid(row=9, column=0, columnspan=2, sticky="w")
-        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=10, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=self.status_text).grid(row=9, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.stick_text).grid(row=10, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=11, column=0, columnspan=2, sticky="w")
 
         self.meter = tk.Canvas(frame, width=280, height=28, background="white", highlightthickness=1)
-        self.meter.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.meter.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        self.refresh_driver_status()
 
     @staticmethod
     def _add_entry(parent: ttk.Frame, label: str, variable: tk.StringVar, row: int) -> None:
@@ -184,6 +200,20 @@ class TreadmillApp:
 
     def _tray_exit(self, icon, item) -> None:
         self.root.after(0, self.close)
+
+    def refresh_driver_status(self) -> None:
+        status = query_vigembus_status()
+        self.driver_status_text.set(status.message)
+
+    def open_driver_install(self) -> None:
+        if open_vigembus_download():
+            self.status_text.set("Opened ViGEmBus driver download page")
+            return
+
+        messagebox.showerror(
+            "Could not open driver page",
+            "Open this URL manually: https://github.com/ViGEm/ViGEmBus/releases",
+        )
 
     def _on_start_with_windows_changed(self) -> None:
         enabled = self.start_with_windows.get()
