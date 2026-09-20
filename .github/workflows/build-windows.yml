@@ -55,10 +55,16 @@ jobs:
         shell: pwsh
         run: .\scripts\build-exe.ps1 -UseBuiltLayer
 
+      # A genuine 32-bit OpenXR client (32-bit Khronos loader). HKCU is shared between 32- and 64-bit
+      # processes, and a layer that cannot be loaded fails xrCreateInstance, so this guards against the
+      # x64-only layer ever keeping a 32-bit game from starting.
+      - name: Build the 32-bit check
+        shell: pwsh
+        run: .\scripts\build-win32-check.ps1
       # The path a real game takes: register the layer for real and let the OpenXR loader discover it through
       # the registry, from the Python sources and from the packaged exe. Safe here: the runner is disposable
       # (the tests also restore the registry themselves).
-      - name: Validate the installed layer (implicit loading, packaged exe)
+      - name: Validate the installed layer (implicit loading, packaged exe, 32-bit game)
         env:
           VRTREAD_TEST_REGISTRY: "1"
         run: python -m pytest -rs tests/test_installed_layer.py

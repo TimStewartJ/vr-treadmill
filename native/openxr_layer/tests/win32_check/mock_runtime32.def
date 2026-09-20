@@ -1,0 +1,3 @@
+LIBRARY vrtread_mock_runtime32
+EXPORTS
+    xrNegotiateLoaderRuntimeInterface

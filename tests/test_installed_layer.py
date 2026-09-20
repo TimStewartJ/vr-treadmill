@@ -36,6 +36,8 @@ REPO = Path(__file__).resolve().parents[1]
 PROBE = REPO / "native" / "openxr_layer" / "build" / "tests" / "bin" / "vrtread_layer_tests.exe"
 BUILT_LAYER = REPO / "native" / "openxr_layer" / "bin" / DLL_FILE_NAME
 FROZEN_APP = REPO / "dist" / "VRTreadmill.exe"
+PROBE_32_BIT = REPO / "native" / "openxr_layer" / "build-win32-check" / "bin" / "vrtread_probe32.exe"
+XR_ERROR_FILE_ACCESS_ERROR = -32
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or os.environ.get("VRTREAD_TEST_REGISTRY") != "1" or not PROBE.is_file(),
@@ -184,3 +186,47 @@ def test_packaged_app_installs_the_exact_dll_that_was_tested(tmp_path: Path) -> 
         assert disabled.returncode == 0
         assert not [name for name in registry.values(IMPLICIT_KEY) if str(install_root).lower() in name.lower()]
         assert not install_root.exists()
+
+
+def run_32_bit_game() -> dict:
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("XR_", "VRTREAD_"))}
+    result = subprocess.run([str(PROBE_32_BIT)], capture_output=True, text=True, timeout=60, env=env)
+    assert result.returncode == 0, result.stderr
+    return json.loads(next(line for line in result.stdout.splitlines() if line.startswith("{")))
+
+
+@pytest.mark.skipif(not PROBE_32_BIT.is_file(), reason="32-bit client not built (scripts\\build-win32-check.ps1)")
+def test_a_genuine_32_bit_game_still_starts_with_the_layer_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real WOW64 process with the real 32-bit Khronos loader, and nothing but the registry to go on.
+
+    HKCU is shared between 32- and 64-bit processes, so a 32-bit game sees the manifest of this x64-only layer.
+    The loader cannot load the DLL there, and when no API layer could be loaded it fails xrCreateInstance:
+    the game would not start in VR at all.
+    """
+    monkeypatch.setenv(openxr.INSTALL_ROOT_ENV, str(tmp_path / "installed"))
+    monkeypatch.delenv(openxr.BUNDLE_DIR_ENV, raising=False)
+
+    with registry_restored_afterwards() as registry:
+        status = enable_layer()
+        assert status.enabled and not status.stale
+
+        outcome = run_32_bit_game()
+        assert outcome["pointer_bits"] == 32
+        assert outcome["processor_architew6432"] == "AMD64"  # set by Windows itself, in every 32-bit process
+        assert outcome["create_result"] == 0                 # the game starts
+        assert outcome["layer_loaded"] is False              # and the layer stayed out of it
+
+        # Counter-experiment: the very same DLL behind a manifest WITHOUT disable_environment=PROCESSOR_ARCHITEW6432
+        # (which is what the unreleased prototype registered) really does break the 32-bit game.
+        unprotected = tmp_path / "unprotected"
+        unprotected.mkdir()
+        (unprotected / DLL_FILE_NAME).write_bytes(BUILT_LAYER.read_bytes())
+        manifest = json.loads((status.current_manifest).read_text(encoding="utf-8"))
+        manifest["api_layer"]["disable_environment"] = "VRTREAD_TEST_VARIABLE_THAT_IS_NEVER_SET"
+        unprotected_manifest = unprotected / openxr.MANIFEST_FILE_NAME
+        unprotected_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        registry.set_value(IMPLICIT_KEY, str(unprotected_manifest), 0)
+
+        broken = run_32_bit_game()
+        assert broken["create_result"] == XR_ERROR_FILE_ACCESS_ERROR
+        assert broken["layer_loaded"] is False
