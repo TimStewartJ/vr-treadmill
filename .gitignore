@@ -10,3 +10,8 @@ dist/
 .vscode/
 .idea/
 
+native/openxr_layer/build/
+native/openxr_layer/bin/
+native/openxr_layer/lib/
+native/openxr_layer/generated/
+native/openxr_layer/build-win32-check/

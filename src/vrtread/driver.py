@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 
 VIGEMBUS_SERVICE_NAME = "ViGEmBus"
-VIGEMBUS_INSTALL_URL = "https://github.com/ViGEm/ViGEmBus/releases"
+VIGEMBUS_INSTALL_URL = "https://github.com/nefarius/ViGEmBus/releases"
 
 SERVICE_STATE_NAMES = {
     1: "stopped",

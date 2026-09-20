@@ -1,0 +1,11 @@
+{
+  "file_format_version": "1.0.0",
+  "api_layer": {
+    "name": "XR_APILAYER_VRTREAD_treadmill",
+    "library_path": ".\\vrtread_openxr_layer.dll",
+    "api_version": "1.0",
+    "implementation_version": "4",
+    "description": "VR Treadmill: drives left-thumbstick locomotion from a treadmill sensor",
+    "disable_environment": "PROCESSOR_ARCHITEW6432"
+  }
+}

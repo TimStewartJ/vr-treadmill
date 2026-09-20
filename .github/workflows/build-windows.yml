@@ -31,12 +31,43 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run tests
-        run: python -m pytest
+      # The test "game" drives the real Khronos OpenXR loader, which loads the layer DLL on top of a mock
+      # runtime. Also checks the hand-written OpenXR header against the official one and that the DLL
+      # imports nothing but kernel32.
+      - name: Build and test the OpenXR layer
+        shell: pwsh
+        run: .\scripts\build-openxr-layer.ps1 -Test
 
+      # Includes the cross-language end-to-end tests: real Python publisher/engine -> layer DLL -> native game.
+      - name: Run Python tests
+        run: python -m pytest -rs
+
+      - name: Upload OpenXR layer test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openxr-layer-test-logs
+          path: native/openxr_layer/build/Testing/
+          if-no-files-found: ignore
+
+      # -UseBuiltLayer: ship the exact layer binary that the steps above validated.
       - name: Build executable
         shell: pwsh
-        run: .\scripts\build-exe.ps1
+        run: .\scripts\build-exe.ps1 -UseBuiltLayer
+
+      # A genuine 32-bit OpenXR client (32-bit Khronos loader). HKCU is shared between 32- and 64-bit
+      # processes, and a layer that cannot be loaded fails xrCreateInstance, so this guards against the
+      # x64-only layer ever keeping a 32-bit game from starting.
+      - name: Build the 32-bit check
+        shell: pwsh
+        run: .\scripts\build-win32-check.ps1
+      # The path a real game takes: register the layer for real and let the OpenXR loader discover it through
+      # the registry, from the Python sources and from the packaged exe. Safe here: the runner is disposable
+      # (the tests also restore the registry themselves).
+      - name: Validate the installed layer (implicit loading, packaged exe, 32-bit game)
+        env:
+          VRTREAD_TEST_REGISTRY: "1"
+        run: python -m pytest -rs tests/test_installed_layer.py
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -79,7 +110,7 @@ jobs:
           Portable option:
           - VRTreadmill.exe
 
-          ViGEmBus is still required for virtual Xbox controller support. If the app says the driver is missing, use the Driver section in the app to open the official driver download page.
+          OpenXR output needs no driver. Xbox controller output needs ViGEmBus; if the app says the driver is missing, use the Output tab to open its download page.
           "@
           gh release create latest `
             dist/VRTreadmill-Setup.exe `

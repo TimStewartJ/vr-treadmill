@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vr-treadmill"
-version = "0.1.0"
-description = "Mouse treadmill to virtual Xbox 360 controller input for Windows VR games"
+version = "0.2.0"
+description = "Mouse treadmill to OpenXR and virtual controller locomotion input for Windows VR games"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 vrtread-cli = "vrtread.cli:main"
 vrtread-gui = "vrtread.gui:main"
+vrtread-openxr = "vrtread.openxr:main"
 
 [project.optional-dependencies]
 dev = [
