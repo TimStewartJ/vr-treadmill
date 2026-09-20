@@ -43,6 +43,76 @@ std::string json_escape(const std::string& value) {
     return out;
 }
 
+// Instance-level check against a REAL runtime (no headset needed, no session is created):
+//   vrtread_layer_tests.exe --real-runtime <runtime.json | active>
+// Loads the layer build under test explicitly, creates an instance on the given runtime, and exercises every
+// instance-level call the layer hooks. The layer log then shows whether it attached in "active" mode, i.e.
+// whether the real runtime provided every function the layer needs.
+int run_real_runtime_check(const std::string& runtime_json) {
+    configure_loader_environment();
+    set_env("XR_RUNTIME_JSON", runtime_json == "active" ? nullptr : runtime_json.c_str());
+
+    XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
+    strncpy_s(info.applicationInfo.applicationName, "VRTreadmillRuntimeCheck", _TRUNCATE);
+    strncpy_s(info.applicationInfo.engineName, "Probe", _TRUNCATE);
+    info.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    XrInstance instance = XR_NULL_HANDLE;
+    const XrResult created = xrCreateInstance(&info, &instance);
+    const bool layer_loaded = GetModuleHandleA("vrtread_openxr_layer.dll") != nullptr;
+    std::printf("{\"create_instance\":%d,\"layer_loaded_during_create\":%s}\n", static_cast<int>(created), layer_loaded ? "true" : "false");
+    if (created != XR_SUCCESS) {
+        return 0;  // a runtime that is not available is a valid outcome of this check
+    }
+
+    XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
+    xrGetInstanceProperties(instance, &properties);
+    XrSystemGetInfo system_info{XR_TYPE_SYSTEM_GET_INFO};
+    system_info.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+    XrSystemId system_id = XR_NULL_SYSTEM_ID;
+    const XrResult system = xrGetSystem(instance, &system_info, &system_id);
+
+    XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strncpy_s(set_info.actionSetName, "gameplay", _TRUNCATE);
+    strncpy_s(set_info.localizedActionSetName, "Gameplay", _TRUNCATE);
+    XrActionSet set = XR_NULL_HANDLE;
+    const XrResult set_result = xrCreateActionSet(instance, &set_info, &set);
+
+    XrPath hands[2] = {XR_NULL_PATH, XR_NULL_PATH};
+    xrStringToPath(instance, kLeft, &hands[0]);
+    xrStringToPath(instance, kRight, &hands[1]);
+    XrActionCreateInfo action_info{XR_TYPE_ACTION_CREATE_INFO};
+    strncpy_s(action_info.actionName, "thumbstick", _TRUNCATE);
+    strncpy_s(action_info.localizedActionName, "Thumbstick", _TRUNCATE);
+    action_info.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+    action_info.countSubactionPaths = 2;
+    action_info.subactionPaths = hands;
+    XrAction action = XR_NULL_HANDLE;
+    const XrResult action_result = set != XR_NULL_HANDLE ? xrCreateAction(set, &action_info, &action) : XR_ERROR_HANDLE_INVALID;
+
+    XrResult suggest_result = XR_ERROR_HANDLE_INVALID;
+    if (action != XR_NULL_HANDLE) {
+        XrPath profile = XR_NULL_PATH;
+        XrPath left_stick = XR_NULL_PATH;
+        XrPath right_stick = XR_NULL_PATH;
+        xrStringToPath(instance, kTouchProfile, &profile);
+        xrStringToPath(instance, "/user/hand/left/input/thumbstick", &left_stick);
+        xrStringToPath(instance, "/user/hand/right/input/thumbstick", &right_stick);
+        const XrActionSuggestedBinding bindings[] = {{action, left_stick}, {action, right_stick}};
+        XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        suggested.interactionProfile = profile;
+        suggested.countSuggestedBindings = 2;
+        suggested.suggestedBindings = bindings;
+        suggest_result = xrSuggestInteractionProfileBindings(instance, &suggested);
+    }
+
+    std::printf("{\"runtime\":\"%s\",\"get_system\":%d,\"create_action_set\":%d,\"create_action\":%d,\"suggest_bindings\":%d}\n",
+                json_escape(properties.runtimeName).c_str(), static_cast<int>(system), static_cast<int>(set_result),
+                static_cast<int>(action_result), static_cast<int>(suggest_result));
+    const XrResult destroyed = xrDestroyInstance(instance);
+    std::printf("{\"destroy_instance\":%d}\n", static_cast<int>(destroyed));
+    return 0;
+}
+
 int run_probe(int frames, int interval_ms, bool implicit, bool simulate_wow64) {
     if (simulate_wow64) {
         // What Windows does for every 32-bit process. It has to be set from inside: Windows strips this
@@ -107,6 +177,7 @@ int main(int argc, char** argv) {
     std::string filter;
     std::string mapping;
     std::string log_dir;
+    std::string real_runtime;
     bool probe = false;
     bool implicit = false;
     bool simulate_wow64 = false;
@@ -123,6 +194,8 @@ int main(int argc, char** argv) {
             implicit = true;
         } else if (arg == "--simulate-wow64") {
             simulate_wow64 = true;
+        } else if (arg == "--real-runtime") {
+            real_runtime = value();
         } else if (arg == "--mapping") {
             mapping = value();
         } else if (arg == "--frames") {
@@ -151,6 +224,10 @@ int main(int argc, char** argv) {
         fixtures().mapping_name = widen(mapping);
         set_env(vrtread::kMappingNameEnvVar, mapping.c_str());
 
+        if (!real_runtime.empty()) {
+            std::printf("{\"log_dir\":\"%s\"}\n", json_escape(log_dir).c_str());
+            return run_real_runtime_check(real_runtime);
+        }
         if (probe) {
             return run_probe(frames, interval_ms, implicit, simulate_wow64);
         }

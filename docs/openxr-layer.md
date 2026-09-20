@@ -108,6 +108,17 @@ Timestamps are `GetTickCount64` on both sides. A publisher mutex refuses a secon
 
 The harness was checked by mutation: reintroducing the prototype's "ignore the subaction path" bug fails six tests.
 
+### Checking against a real runtime without a headset
+
+```powershell
+native\openxr_layer\build\tests\bin\vrtread_layer_tests.exe --real-runtime active
+```
+
+creates an instance on the machine's active runtime (or on a given runtime JSON) with the layer build under test
+loaded explicitly, and exercises every instance-level call the layer hooks: no session, so no headset is needed,
+but SteamVR starts if it is not running. The printed log folder then shows whether the layer attached in
+`mode=active`, i.e. whether the real runtime provided every function it needs. A runtime that is unavailable is a
+valid outcome: its error must come back through the layer unchanged.
 The mock runtime models the OpenXR input semantics the layer relies on (subactions, combined reads, `isActive`,
 set priority, focus). It is not SteamVR. What remains for a human is in
 [in-headset-checklist.md](in-headset-checklist.md).
