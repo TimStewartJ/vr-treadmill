@@ -1,0 +1,15 @@
+# Runs both ABI probes and fails if their output differs.
+execute_process(COMMAND "${MINIMAL}" OUTPUT_VARIABLE minimal_output RESULT_VARIABLE minimal_result)
+execute_process(COMMAND "${OFFICIAL}" OUTPUT_VARIABLE official_output RESULT_VARIABLE official_result)
+if(NOT minimal_result EQUAL 0 OR NOT official_result EQUAL 0)
+  message(FATAL_ERROR "ABI probe failed to run (minimal=${minimal_result}, official=${official_result})")
+endif()
+if(NOT minimal_output STREQUAL official_output)
+  file(WRITE "${CMAKE_CURRENT_LIST_DIR}/../build/abi_minimal.txt" "${minimal_output}")
+  file(WRITE "${CMAKE_CURRENT_LIST_DIR}/../build/abi_official.txt" "${official_output}")
+  message(FATAL_ERROR "include/openxr_minimal.h no longer matches the official OpenXR headers.\n"
+                      "Compare build/abi_minimal.txt with build/abi_official.txt.")
+endif()
+string(REGEX MATCHALL "\n" lines "${minimal_output}")
+list(LENGTH lines line_count)
+message(STATUS "openxr_minimal.h matches the official headers on all ${line_count} checked points")
