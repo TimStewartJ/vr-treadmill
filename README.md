@@ -94,7 +94,7 @@ Design, safety rules and the evidence behind them: [docs/openxr-layer.md](docs/o
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\scripts\build-openxr-layer.ps1          # needs Visual Studio 2022 C++ tools (CMake included)
+.\scripts\build-openxr-layer.ps1          # needs the Visual Studio C++ build tools, 2022 or newer (CMake included)
 .\.venv\Scripts\vrtread-gui.exe
 ```
 

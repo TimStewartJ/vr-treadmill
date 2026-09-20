@@ -16,7 +16,7 @@ if (-not $cmake) {
 }
 if (-not $cmake) { throw "cmake.exe was not found." }
 
-& $cmake -S $source -B $build -G "Visual Studio 17 2022" -A Win32
+& $cmake -S $source -B $build -A Win32
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed with exit code $LASTEXITCODE." }
 & $cmake --build $build --config Release -- /m /v:m /nologo
 if ($LASTEXITCODE -ne 0) { throw "32-bit build failed with exit code $LASTEXITCODE." }

@@ -47,8 +47,10 @@ if (-not $cmake) { throw "cmake.exe was not found. Install CMake or the Visual S
 
 if ($Clean -and (Test-Path $build)) { Remove-Item -Recurse -Force $build }
 
+# No -G: CMake picks the newest installed Visual Studio, so this keeps working as build machines move on
+# (GitHub's windows-latest image dropped VS 2022). -A requires a Visual Studio generator, which is the default.
 $testsFlag = if ($Test) { "ON" } else { "OFF" }
-Invoke-Checked "CMake configure" { & $cmake -S $layer -B $build -G "Visual Studio 17 2022" -A x64 "-DVRTREAD_BUILD_TESTS=$testsFlag" }
+Invoke-Checked "CMake configure" { & $cmake -S $layer -B $build -A x64 "-DVRTREAD_BUILD_TESTS=$testsFlag" }
 if ($Rebuild) {
     Invoke-Checked "Layer rebuild" { & $cmake --build $build --config Release --target vrtread_openxr_layer --clean-first -- /m /v:m /nologo }
 }
