@@ -10,6 +10,7 @@
 //       With --implicit the layer is NOT handed to the loader: like a real game, the loader has to discover
 //       it through the registry. The first output line reports which layer DLL (if any) got loaded.
 
+#include "deelevate.h"
 #include "harness.h"
 
 #include <chrono>
@@ -174,6 +175,11 @@ int run_probe(int frames, int interval_ms, bool implicit, bool simulate_wow64) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    int relaunched_exit_code = 0;
+    if (deelevate::run_at_medium_integrity(relaunched_exit_code)) {
+        return relaunched_exit_code;  // elevated (CI): a medium-integrity copy of this process did the work
+    }
+
     std::string filter;
     std::string mapping;
     std::string log_dir;

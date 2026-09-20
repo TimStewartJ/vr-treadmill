@@ -57,7 +57,7 @@ add_executable(vrtread_layer_tests
 )
 target_compile_features(vrtread_layer_tests PRIVATE cxx_std_17)
 target_include_directories(vrtread_layer_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../include")
-target_link_libraries(vrtread_layer_tests PRIVATE OpenXR::openxr_loader OpenXR::headers)
+target_link_libraries(vrtread_layer_tests PRIVATE OpenXR::openxr_loader OpenXR::headers advapi32)
 target_compile_definitions(vrtread_layer_tests PRIVATE
   WIN32_LEAN_AND_MEAN
   NOMINMAX

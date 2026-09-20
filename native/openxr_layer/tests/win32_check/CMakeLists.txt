@@ -36,7 +36,7 @@ target_compile_definitions(vrtread_mock_runtime32 PRIVATE WIN32_LEAN_AND_MEAN NO
 
 add_executable(vrtread_probe32 probe32.cpp)
 target_compile_features(vrtread_probe32 PRIVATE cxx_std_17)
-target_link_libraries(vrtread_probe32 PRIVATE OpenXR::openxr_loader OpenXR::headers)
+target_link_libraries(vrtread_probe32 PRIVATE OpenXR::openxr_loader OpenXR::headers advapi32)
 target_compile_definitions(vrtread_probe32 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
   VRTREAD_RUNTIME32_JSON="${OUT}/vrtread_mock_runtime32.json")
 

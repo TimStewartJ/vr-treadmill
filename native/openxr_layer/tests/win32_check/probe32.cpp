@@ -1,7 +1,7 @@
 // A genuine 32-bit OpenXR client. It gives the loader nothing but a runtime: API layers are whatever the real
 // registry says, exactly as for a 32-bit game. Prints one JSON object describing what happened.
 
-#include <windows.h>
+#include "../deelevate.h"
 
 #include <openxr/openxr.h>
 
@@ -9,6 +9,11 @@
 #include <cstring>
 
 int main() {
+    int relaunched_exit_code = 0;
+    if (deelevate::run_at_medium_integrity(relaunched_exit_code)) {
+        return relaunched_exit_code;
+    }
+
     SetEnvironmentVariableA("XR_RUNTIME_JSON", VRTREAD_RUNTIME32_JSON);
     SetEnvironmentVariableA("XR_API_LAYER_PATH", nullptr);
     SetEnvironmentVariableA("XR_ENABLE_API_LAYERS", nullptr);
