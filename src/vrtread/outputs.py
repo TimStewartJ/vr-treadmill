@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import ctypes
-import mmap
+import math
+import os
 import platform
 import struct
 import time
@@ -19,6 +20,10 @@ class OutputMode(str, Enum):
     def uses_openxr(self) -> bool:
         return self in {OutputMode.OPENXR, OutputMode.BOTH}
 
+    @property
+    def uses_xbox(self) -> bool:
+        return self in {OutputMode.XBOX, OutputMode.BOTH}
+
 
 class OpenXrFilterMode(str, Enum):
     BALANCED = "balanced"
@@ -26,10 +31,18 @@ class OpenXrFilterMode(str, Enum):
     COMPATIBILITY = "compatibility"
 
 
+class OpenXrCombineMode(str, Enum):
+    MAX = "max"          # whichever of treadmill / physical stick is pushed further wins
+    REPLACE = "replace"  # treadmill replaces the physical stick while walking
+    ADD = "add"          # treadmill + physical stick, clamped
+
+
 @dataclass(frozen=True, slots=True)
 class OutputConfig:
     mode: OutputMode = OutputMode.XBOX
     openxr_filter_mode: OpenXrFilterMode = OpenXrFilterMode.BALANCED
+    openxr_combine_mode: OpenXrCombineMode = OpenXrCombineMode.MAX
+    openxr_drive_inactive: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,11 +51,13 @@ class TreadmillVector:
     y: float
     active: bool
     timestamp_ms: int
-    openxr_filter_mode: OpenXrFilterMode = OpenXrFilterMode.BALANCED
 
 
 class TreadmillOutput(Protocol):
     def start(self) -> None:
+        ...
+
+    def configure(self, config: OutputConfig) -> None:
         ...
 
     def update(self, vector: TreadmillVector) -> None:
@@ -55,28 +70,67 @@ class TreadmillOutput(Protocol):
         ...
 
 
-OPENXR_MAPPING_NAME = "Local\\VRTreadmillOpenXRState_v1"
-OPENXR_MAGIC = 0x4D545256
-OPENXR_VERSION = 1
-OPENXR_ACTIVE_FLAG = 0x1
-OPENXR_STRUCT_FORMAT = "<IIIIQQffQQ"
-OPENXR_STRUCT_SIZE = struct.calcsize(OPENXR_STRUCT_FORMAT)
-OPENXR_STALE_MS = 250
-OPENXR_FILTER_MODE_BALANCED = 0
-OPENXR_FILTER_MODE_STRICT = 1
-OPENXR_FILTER_MODE_COMPATIBILITY = 2
+# ---------------------------------------------------------------------------------------------------------
+# Shared-memory contract with the OpenXR layer. Keep in sync with
+# native/openxr_layer/include/vrtread_shared_memory.h (tests on both sides assert the layout).
+# ---------------------------------------------------------------------------------------------------------
 
-_OPENXR_FILTER_MODE_VALUES = {
-    OpenXrFilterMode.BALANCED: OPENXR_FILTER_MODE_BALANCED,
-    OpenXrFilterMode.STRICT: OPENXR_FILTER_MODE_STRICT,
-    OpenXrFilterMode.COMPATIBILITY: OPENXR_FILTER_MODE_COMPATIBILITY,
+OPENXR_MAPPING_NAME = "Local\\VRTreadmillOpenXRState_v2"
+OPENXR_MAGIC = 0x4D545256
+OPENXR_VERSION = 2
+OPENXR_FLAG_ACTIVE = 0x1
+OPENXR_OPTION_DRIVE_INACTIVE = 0x1
+OPENXR_STRUCT_FORMAT = "<IIIIQQffIIIIQ"
+OPENXR_STRUCT_SIZE = struct.calcsize(OPENXR_STRUCT_FORMAT)
+OPENXR_SEQ_OFFSET = 16
+OPENXR_STALE_MS = 250
+
+_FILTER_MODE_VALUES = {
+    OpenXrFilterMode.BALANCED: 0,
+    OpenXrFilterMode.STRICT: 1,
+    OpenXrFilterMode.COMPATIBILITY: 2,
 }
+_COMBINE_MODE_VALUES = {
+    OpenXrCombineMode.MAX: 0,
+    OpenXrCombineMode.REPLACE: 1,
+    OpenXrCombineMode.ADD: 2,
+}
+
+assert OPENXR_STRUCT_SIZE == 64, "OpenXR shared state must match the 64-byte C++ SharedState"
 
 
 def now_ms() -> int:
+    """Same clock the layer uses for its staleness check (GetTickCount64)."""
     if platform.system() == "Windows":
         return int(ctypes.windll.kernel32.GetTickCount64())
     return int(time.monotonic() * 1000)
+
+
+def _finite_unit(value: float) -> float:
+    value = float(value)
+    if not math.isfinite(value):
+        return 0.0
+    return max(-1.0, min(1.0, value))
+
+
+def pack_openxr_state(seq: int, vector: TreadmillVector, config: OutputConfig, publisher_pid: int) -> bytes:
+    options = OPENXR_OPTION_DRIVE_INACTIVE if config.openxr_drive_inactive else 0
+    return struct.pack(
+        OPENXR_STRUCT_FORMAT,
+        OPENXR_MAGIC,
+        OPENXR_VERSION,
+        OPENXR_STRUCT_SIZE,
+        OPENXR_FLAG_ACTIVE if vector.active else 0,
+        seq,
+        int(vector.timestamp_ms),
+        _finite_unit(vector.x),
+        _finite_unit(vector.y),
+        _FILTER_MODE_VALUES[config.openxr_filter_mode],
+        _COMBINE_MODE_VALUES[config.openxr_combine_mode],
+        options,
+        publisher_pid & 0xFFFFFFFF,
+        0,
+    )
 
 
 class VGamepadOutput:
@@ -97,11 +151,14 @@ class VGamepadOutput:
                 "Confirm ViGEmBus is installed and running."
             ) from exc
 
+    def configure(self, config: OutputConfig) -> None:
+        return None
+
     def update(self, vector: TreadmillVector) -> None:
         gamepad = self._gamepad
         if gamepad is None:
             raise RuntimeError("Virtual gamepad is not available.")
-        gamepad.left_joystick_float(x_value_float=vector.x, y_value_float=vector.y)
+        gamepad.left_joystick_float(x_value_float=_finite_unit(vector.x), y_value_float=_finite_unit(vector.y))
         gamepad.update()
 
     def reset(self) -> None:
@@ -112,89 +169,137 @@ class VGamepadOutput:
         gamepad.update()
 
     def close(self) -> None:
-        self.reset()
-        self._gamepad = None
+        try:
+            self.reset()
+        finally:
+            self._gamepad = None
+
+
+class OpenXrPublisherBusyError(RuntimeError):
+    pass
 
 
 class OpenXrSharedMemoryOutput:
-    def __init__(
-        self,
-        mapping_name: str = OPENXR_MAPPING_NAME,
-        filter_mode: OpenXrFilterMode = OpenXrFilterMode.BALANCED,
-    ) -> None:
+    """Publishes the treadmill vector for the OpenXR layer through a named, seqlock-protected block."""
+
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    _PAGE_READWRITE = 0x04
+    _FILE_MAP_ALL_ACCESS = 0x000F001F
+    _ERROR_ALREADY_EXISTS = 183
+
+    def __init__(self, config: OutputConfig | None = None, mapping_name: str = OPENXR_MAPPING_NAME) -> None:
+        self._config = config or OutputConfig(mode=OutputMode.OPENXR)
         self._mapping_name = mapping_name
-        self._mapping: mmap.mmap | None = None
+        self._mutex_name = mapping_name + "_publisher"
+        self._kernel32 = None
+        self._mutex = None
+        self._mapping = None
+        self._view = None
+        self._buffer = None
         self._seq = 0
-        self._filter_mode = filter_mode
+        self._pid = os.getpid()
 
     def start(self) -> None:
         if platform.system() != "Windows":
             raise RuntimeError("OpenXR shared-memory output requires Windows.")
-        self._mapping = mmap.mmap(-1, OPENXR_STRUCT_SIZE, tagname=self._mapping_name)
-        self._write(
-            TreadmillVector(
-                x=0.0,
-                y=0.0,
-                active=False,
-                timestamp_ms=now_ms(),
-                openxr_filter_mode=self._filter_mode,
+        if self._buffer is not None:
+            return
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.CreateFileMappingW.restype = ctypes.c_void_p
+        kernel32.CreateFileMappingW.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_wchar_p,
+        ]
+        kernel32.MapViewOfFile.restype = ctypes.c_void_p
+        kernel32.MapViewOfFile.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t]
+        kernel32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        self._kernel32 = kernel32
+
+        try:
+            # The mapping itself can outlive us (a running game keeps it open), so "already exists" on the
+            # mapping says nothing. A separate mutex, only ever held by publishers, does.
+            ctypes.set_last_error(0)
+            mutex = kernel32.CreateMutexW(None, 0, self._mutex_name)
+            if not mutex:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._mutex = mutex
+            if ctypes.get_last_error() == self._ERROR_ALREADY_EXISTS:
+                raise OpenXrPublisherBusyError(
+                    "Another copy of VR Treadmill is already publishing OpenXR movement. Close it first."
+                )
+
+            mapping = kernel32.CreateFileMappingW(
+                self._INVALID_HANDLE_VALUE, None, self._PAGE_READWRITE, 0, OPENXR_STRUCT_SIZE, self._mapping_name
             )
-        )
+            if not mapping:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._mapping = mapping
+
+            view = kernel32.MapViewOfFile(mapping, self._FILE_MAP_ALL_ACCESS, 0, 0, OPENXR_STRUCT_SIZE)
+            if not view:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._view = view
+            self._buffer = (ctypes.c_char * OPENXR_STRUCT_SIZE).from_address(view)
+
+            # A game that is still running may have kept a previous block alive; carry its sequence on.
+            (existing_seq,) = struct.unpack_from("<Q", self._buffer, OPENXR_SEQ_OFFSET)
+            self._seq = existing_seq + (existing_seq & 1)
+        except Exception:
+            self._release()
+            raise
+
+        self.reset()
+
+    def configure(self, config: OutputConfig) -> None:
+        self._config = config
 
     def update(self, vector: TreadmillVector) -> None:
-        self._filter_mode = vector.openxr_filter_mode
         self._write(vector)
 
     def reset(self) -> None:
-        if self._mapping is None:
+        if self._buffer is None:
             return
-        self._write(
-            TreadmillVector(
-                x=0.0,
-                y=0.0,
-                active=False,
-                timestamp_ms=now_ms(),
-                openxr_filter_mode=self._filter_mode,
-            )
-        )
+        self._write(TreadmillVector(x=0.0, y=0.0, active=False, timestamp_ms=now_ms()))
 
     def close(self) -> None:
-        if self._mapping is None:
+        if self._buffer is None:
+            self._release()
             return
         try:
             self.reset()
         finally:
-            self._mapping.close()
-            self._mapping = None
+            self._release()
 
     def _write(self, vector: TreadmillVector) -> None:
-        mapping = self._mapping
-        if mapping is None:
+        buffer = self._buffer
+        if buffer is None:
             raise RuntimeError("OpenXR shared-memory output is not available.")
 
         odd_seq = self._seq + 1
         even_seq = self._seq + 2
-        flags = OPENXR_ACTIVE_FLAG if vector.active else 0
-        filter_mode = openxr_filter_mode_value(vector.openxr_filter_mode)
-
-        struct.pack_into("<Q", mapping, 16, odd_seq)
-        struct.pack_into(
-            OPENXR_STRUCT_FORMAT,
-            mapping,
-            0,
-            OPENXR_MAGIC,
-            OPENXR_VERSION,
-            OPENXR_STRUCT_SIZE,
-            flags,
-            odd_seq,
-            vector.timestamp_ms,
-            float(vector.x),
-            float(vector.y),
-            filter_mode,
-            0,
-        )
-        struct.pack_into("<Q", mapping, 16, even_seq)
+        # Seqlock: readers ignore the block while seq is odd and re-check seq after copying.
+        struct.pack_into("<Q", buffer, OPENXR_SEQ_OFFSET, odd_seq)
+        payload = pack_openxr_state(odd_seq, vector, self._config, self._pid)
+        ctypes.memmove(ctypes.addressof(buffer), payload, OPENXR_STRUCT_SIZE)
+        struct.pack_into("<Q", buffer, OPENXR_SEQ_OFFSET, even_seq)
         self._seq = even_seq
+
+    def _release(self) -> None:
+        kernel32 = self._kernel32
+        self._buffer = None
+        if kernel32 is not None:
+            if self._view:
+                kernel32.UnmapViewOfFile(self._view)
+            if self._mapping:
+                kernel32.CloseHandle(self._mapping)
+            if self._mutex:
+                kernel32.CloseHandle(self._mutex)
+        self._view = None
+        self._mapping = None
+        self._mutex = None
 
 
 class CompositeOutput:
@@ -211,8 +316,15 @@ class CompositeOutput:
                 started.append(output)
         except Exception:
             for output in reversed(started):
-                output.close()
+                try:
+                    output.close()
+                except Exception:
+                    pass
             raise
+
+    def configure(self, config: OutputConfig) -> None:
+        for output in self._outputs:
+            output.configure(config)
 
     def update(self, vector: TreadmillVector) -> None:
         errors: list[str] = []
@@ -225,43 +337,53 @@ class CompositeOutput:
             raise RuntimeError("; ".join(errors))
 
     def reset(self) -> None:
+        errors: list[str] = []
         for output in self._outputs:
-            output.reset()
+            try:
+                output.reset()
+            except Exception as exc:
+                errors.append(str(exc))
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
     def close(self) -> None:
+        errors: list[str] = []
         for output in reversed(self._outputs):
-            output.close()
+            try:
+                output.close()
+            except Exception as exc:  # one output failing must not leave the other one live
+                errors.append(str(exc))
+        if errors:
+            raise RuntimeError("; ".join(errors))
 
 
 def create_output(config: OutputConfig) -> TreadmillOutput:
     if config.mode == OutputMode.XBOX:
         return VGamepadOutput()
     if config.mode == OutputMode.OPENXR:
-        return OpenXrSharedMemoryOutput(filter_mode=config.openxr_filter_mode)
+        return OpenXrSharedMemoryOutput(config)
     if config.mode == OutputMode.BOTH:
-        return CompositeOutput([VGamepadOutput(), OpenXrSharedMemoryOutput(filter_mode=config.openxr_filter_mode)])
+        return CompositeOutput([VGamepadOutput(), OpenXrSharedMemoryOutput(config)])
     raise ValueError(f"Unsupported output mode: {config.mode}")
 
 
-def parse_output_mode(value: str | OutputMode) -> OutputMode:
-    if isinstance(value, OutputMode):
+def _parse_enum(enum_type, value, label: str):
+    if isinstance(value, enum_type):
         return value
     try:
-        return OutputMode(value)
+        return enum_type(value)
     except ValueError as exc:
-        allowed = ", ".join(mode.value for mode in OutputMode)
-        raise ValueError(f"Output mode must be one of: {allowed}") from exc
+        allowed = ", ".join(member.value for member in enum_type)
+        raise ValueError(f"{label} must be one of: {allowed}") from exc
+
+
+def parse_output_mode(value: str | OutputMode) -> OutputMode:
+    return _parse_enum(OutputMode, value, "Output mode")
 
 
 def parse_openxr_filter_mode(value: str | OpenXrFilterMode) -> OpenXrFilterMode:
-    if isinstance(value, OpenXrFilterMode):
-        return value
-    try:
-        return OpenXrFilterMode(value)
-    except ValueError as exc:
-        allowed = ", ".join(mode.value for mode in OpenXrFilterMode)
-        raise ValueError(f"OpenXR filter mode must be one of: {allowed}") from exc
+    return _parse_enum(OpenXrFilterMode, value, "OpenXR filter mode")
 
 
-def openxr_filter_mode_value(mode: str | OpenXrFilterMode) -> int:
-    return _OPENXR_FILTER_MODE_VALUES[parse_openxr_filter_mode(mode)]
+def parse_openxr_combine_mode(value: str | OpenXrCombineMode) -> OpenXrCombineMode:
+    return _parse_enum(OpenXrCombineMode, value, "OpenXR combine mode")

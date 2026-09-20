@@ -1,4 +1,3 @@
-"""VR treadmill mouse-to-gamepad tools."""
+"""VR Treadmill: treadmill sensor to VR locomotion input."""
 
-__version__ = "0.1.0"
-
+__version__ = "0.2.0"
