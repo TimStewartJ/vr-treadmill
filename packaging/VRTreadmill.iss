@@ -26,6 +26,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\native\openxr_layer\bin\vrtread_openxr_layer.dll"; DestDir: "{app}\openxr_layer\bin"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -35,8 +36,21 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+procedure DeleteOpenXRLayerRegistryValues(ManifestPath: String);
 begin
-  if CurUninstallStep = usUninstall then
+  RegDeleteValue(HKEY_CURRENT_USER, 'Software\Khronos\OpenXR\1\ApiLayers\Explicit', ManifestPath);
+  RegDeleteValue(HKEY_CURRENT_USER, 'Software\Khronos\OpenXR\1\ApiLayers\Implicit', ManifestPath);
+  RegDeleteValue(HKEY_CURRENT_USER, 'Software\WOW6432Node\Khronos\OpenXR\1\ApiLayers\Explicit', ManifestPath);
+  RegDeleteValue(HKEY_CURRENT_USER, 'Software\WOW6432Node\Khronos\OpenXR\1\ApiLayers\Implicit', ManifestPath);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ManifestPath: String;
+begin
+  if CurUninstallStep = usUninstall then begin
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'VRTreadmill');
+    ManifestPath := ExpandConstant('{app}\openxr_layer\generated\XR_APILAYER_VRTREAD_treadmill.json');
+    DeleteOpenXRLayerRegistryValues(ManifestPath);
+  end;
 end;

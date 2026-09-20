@@ -6,6 +6,8 @@ from tkinter import messagebox, ttk
 
 from .driver import open_vigembus_download, query_vigembus_status
 from .engine import TreadmillConfig, TreadmillEngine
+from .openxr import ensure_automatic_layer, query_layer_status, register_layer, unregister_layer
+from .outputs import OpenXrFilterMode, OutputConfig, OutputMode
 from .settings import AppSettings, load_settings, save_settings
 from .startup import current_startup_command, set_startup_enabled
 
@@ -17,12 +19,23 @@ TUNING_PRESETS = {
     "Snappy": TreadmillConfig(sensitivity=0.0040, decay=0.70, deadzone=2, update_hz=120),
 }
 
+OPENXR_FILTER_LABELS = {
+    OpenXrFilterMode.STRICT: "Strict - locomotion-named left stick only",
+    OpenXrFilterMode.BALANCED: "Balanced - any non-menu left stick",
+    OpenXrFilterMode.COMPATIBILITY: "Compatibility - allow locomotion names if bindings are missing",
+}
+
 
 class TreadmillApp:
     def __init__(self, root: tk.Tk, settings: AppSettings | None = None) -> None:
         self.root = root
-        self.engine = TreadmillEngine()
         self.settings = settings or load_settings()
+        self.engine = TreadmillEngine(
+            output_config=OutputConfig(
+                mode=self.settings.output_mode,
+                openxr_filter_mode=self.settings.openxr_filter_mode,
+            )
+        )
         self.hotkeys = None
         self.tray_icon = None
         self.exiting = False
@@ -36,9 +49,12 @@ class TreadmillApp:
         self.decay_value = tk.StringVar()
         self.deadzone_value = tk.StringVar()
         self.update_hz_value = tk.StringVar()
+        self.output_mode = tk.StringVar(value=self.settings.output_mode.value)
+        self.openxr_filter_mode = tk.StringVar(value=self.settings.openxr_filter_mode.value)
         self.start_with_windows = tk.BooleanVar(value=self.settings.start_with_windows)
         self.start_minimized = tk.BooleanVar(value=self.settings.start_minimized)
         self.driver_status_text = tk.StringVar(value="Driver Status: checking...")
+        self.openxr_status_text = tk.StringVar(value="Automatic OpenXR layer: checking...")
         self.status_text = tk.StringVar(value="Stopped")
         self.stick_text = tk.StringVar(value="Stick Y: +0.000")
 
@@ -46,6 +62,7 @@ class TreadmillApp:
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self.root.bind("<Unmap>", self._on_unmap)
         self._build()
+        self._auto_enable_openxr_if_selected()
         self._start_hotkey_listener()
         self._start_tray_icon()
         self._refresh()
@@ -56,11 +73,11 @@ class TreadmillApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        ttk.Label(frame, text="VR Treadmill turns forward/back treadmill motion into Xbox left-stick movement.").grid(
+        ttk.Label(frame, text="VR Treadmill turns forward/back treadmill motion into VR locomotion input.").grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
 
-        driver_frame = ttk.LabelFrame(frame, text="Driver")
+        driver_frame = ttk.LabelFrame(frame, text="Xbox fallback driver")
         driver_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         driver_frame.columnconfigure(1, weight=1)
         ttk.Label(driver_frame, textvariable=self.driver_status_text).grid(
@@ -73,8 +90,56 @@ class TreadmillApp:
             row=1, column=1, sticky="w", padx=(4, 8), pady=(0, 8)
         )
 
+        output_frame = ttk.LabelFrame(frame, text="Output")
+        output_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        output_frame.columnconfigure(1, weight=1)
+        ttk.Radiobutton(
+            output_frame,
+            text="Xbox controller",
+            value=OutputMode.XBOX.value,
+            variable=self.output_mode,
+            command=self._on_output_mode_changed,
+        ).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 0))
+        ttk.Radiobutton(
+            output_frame,
+            text="OpenXR automatic",
+            value=OutputMode.OPENXR.value,
+            variable=self.output_mode,
+            command=self._on_output_mode_changed,
+        ).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 0))
+        ttk.Radiobutton(
+            output_frame,
+            text="Both",
+            value=OutputMode.BOTH.value,
+            variable=self.output_mode,
+            command=self._on_output_mode_changed,
+        ).grid(row=0, column=2, sticky="w", padx=8, pady=(6, 0))
+        ttk.Label(output_frame, text="OpenXR filter:").grid(row=1, column=0, sticky="w", padx=8, pady=(8, 0))
+        for column, filter_mode in enumerate(
+            (OpenXrFilterMode.STRICT, OpenXrFilterMode.BALANCED, OpenXrFilterMode.COMPATIBILITY)
+        ):
+            ttk.Radiobutton(
+                output_frame,
+                text=OPENXR_FILTER_LABELS[filter_mode],
+                value=filter_mode.value,
+                variable=self.openxr_filter_mode,
+                command=self._on_filter_mode_changed,
+            ).grid(row=2 + column, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 0))
+        ttk.Label(output_frame, textvariable=self.openxr_status_text).grid(
+            row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 4)
+        )
+        ttk.Button(output_frame, text="Refresh OpenXR", command=self.refresh_openxr_status).grid(
+            row=6, column=0, sticky="w", padx=(8, 4), pady=(0, 8)
+        )
+        ttk.Button(output_frame, text="Enable Automatic OpenXR", command=self.register_openxr_layer).grid(
+            row=6, column=1, sticky="w", padx=(4, 4), pady=(0, 8)
+        )
+        ttk.Button(output_frame, text="Disable Automatic OpenXR", command=self.unregister_openxr_layer).grid(
+            row=6, column=2, sticky="w", padx=(4, 8), pady=(0, 8)
+        )
+
         tuning_frame = ttk.LabelFrame(frame, text="Tuning")
-        tuning_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        tuning_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         tuning_frame.columnconfigure(1, weight=1)
 
         ttk.Label(
@@ -140,17 +205,17 @@ class TreadmillApp:
             text="Start with Windows",
             variable=self.start_with_windows,
             command=self._on_start_with_windows_changed,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
         ttk.Checkbutton(
             frame,
             text="Start minimized to tray",
             variable=self.start_minimized,
             command=self._on_start_minimized_changed,
-        ).grid(row=4, column=0, columnspan=2, sticky="w")
+        ).grid(row=5, column=0, columnspan=2, sticky="w")
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         self.start_button = ttk.Button(buttons, text="Start treadmill capture", command=self.start)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self.stop, state="disabled")
         self.hide_button = ttk.Button(buttons, text="Hide to tray", command=self.hide_to_tray)
@@ -158,15 +223,16 @@ class TreadmillApp:
         self.stop_button.grid(row=0, column=1, padx=(0, 8))
         self.hide_button.grid(row=0, column=2)
 
-        ttk.Label(frame, textvariable=self.status_text).grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Label(frame, textvariable=self.stick_text).grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=self.status_text).grid(row=7, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.stick_text).grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Emergency stop hotkey: F8").grid(row=9, column=0, columnspan=2, sticky="w")
 
         self.meter = tk.Canvas(frame, width=280, height=28, background="white", highlightthickness=1)
-        self.meter.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.meter.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
         self._update_tuning_labels()
         self.refresh_driver_status()
+        self.refresh_openxr_status()
 
     def _add_slider(
         self,
@@ -231,9 +297,15 @@ class TreadmillApp:
     def start(self) -> None:
         try:
             config = self._read_config()
+            output_config = self._read_output_config()
+            if output_config.mode.uses_openxr:
+                status = ensure_automatic_layer()
+                self.openxr_status_text.set(status.message)
             self.settings.treadmill = config
+            self.settings.output_mode = output_config.mode
+            self.settings.openxr_filter_mode = output_config.openxr_filter_mode
             self._save_settings()
-            self.engine.start(config)
+            self.engine.start(config, output_config)
         except Exception as exc:
             messagebox.showerror("Could not start VR Treadmill", str(exc))
             return
@@ -295,6 +367,38 @@ class TreadmillApp:
         status = query_vigembus_status()
         self.driver_status_text.set(status.message)
 
+    def refresh_openxr_status(self) -> None:
+        status = query_layer_status()
+        self.openxr_status_text.set(status.message)
+
+    def _auto_enable_openxr_if_selected(self) -> None:
+        if not self.settings.output_mode.uses_openxr:
+            return
+        try:
+            status = ensure_automatic_layer()
+        except Exception as exc:
+            self.openxr_status_text.set(f"Automatic OpenXR layer: {exc}")
+            return
+        self.openxr_status_text.set(status.message)
+
+    def register_openxr_layer(self) -> None:
+        try:
+            status = register_layer()
+        except Exception as exc:
+            messagebox.showerror("Could not enable automatic OpenXR", str(exc))
+            return
+        self.openxr_status_text.set(status.message)
+        self.status_text.set("Automatic OpenXR enabled")
+
+    def unregister_openxr_layer(self) -> None:
+        try:
+            status = unregister_layer()
+        except Exception as exc:
+            messagebox.showerror("Could not disable automatic OpenXR", str(exc))
+            return
+        self.openxr_status_text.set(status.message)
+        self.status_text.set("Automatic OpenXR disabled")
+
     def open_driver_install(self) -> None:
         if open_vigembus_download():
             self.status_text.set("Opened ViGEmBus driver download page")
@@ -349,11 +453,20 @@ class TreadmillApp:
             update_hz=int(round(float(self.update_hz.get()))),
         )
 
+    def _read_output_config(self) -> OutputConfig:
+        return OutputConfig(
+            mode=OutputMode(self.output_mode.get()),
+            openxr_filter_mode=OpenXrFilterMode(self.openxr_filter_mode.get()),
+        )
+
     def _save_settings(self) -> None:
         try:
             self.settings.treadmill = self._read_config()
         except ValueError:
             pass
+        output_config = self._read_output_config()
+        self.settings.output_mode = output_config.mode
+        self.settings.openxr_filter_mode = output_config.openxr_filter_mode
         self.settings.start_with_windows = self.start_with_windows.get()
         self.settings.start_minimized = self.start_minimized.get()
         save_settings(self.settings)
@@ -378,6 +491,32 @@ class TreadmillApp:
             self._save_settings()
         except Exception as exc:
             self.status_text.set(f"Tuning error: {exc}")
+
+    def _on_output_mode_changed(self) -> None:
+        try:
+            output_config = self._read_output_config()
+            self.engine.update_output_config(output_config)
+            self.settings.output_mode = output_config.mode
+            self.settings.openxr_filter_mode = output_config.openxr_filter_mode
+            self._save_settings()
+            if output_config.mode.uses_openxr:
+                status = ensure_automatic_layer()
+                self.openxr_status_text.set(status.message)
+            self.status_text.set(f"Output mode saved: {output_config.mode.value}")
+        except Exception as exc:
+            self.output_mode.set(self.settings.output_mode.value)
+            self.status_text.set(str(exc))
+
+    def _on_filter_mode_changed(self) -> None:
+        try:
+            output_config = self._read_output_config()
+            self.engine.update_output_config(output_config)
+            self.settings.openxr_filter_mode = output_config.openxr_filter_mode
+            self._save_settings()
+            self.status_text.set(f"OpenXR filter saved: {output_config.openxr_filter_mode.value}")
+        except Exception as exc:
+            self.openxr_filter_mode.set(self.settings.openxr_filter_mode.value)
+            self.status_text.set(str(exc))
 
     def _update_tuning_labels(self) -> None:
         self.sensitivity_value.set(f"{float(self.sensitivity.get()):.4f}")

@@ -6,6 +6,8 @@ if (-not (Test-Path $exe)) {
     throw "Missing $exe. Run scripts\build-exe.ps1 first."
 }
 
+& (Join-Path $repoRoot 'scripts\build-openxr-layer.ps1')
+
 $iscc = $env:ISCC_PATH
 if (-not $iscc) {
     $command = Get-Command iscc.exe -ErrorAction SilentlyContinue

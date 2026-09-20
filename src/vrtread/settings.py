@@ -9,6 +9,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from .engine import TreadmillConfig
+from .outputs import OpenXrFilterMode, OutputMode, parse_openxr_filter_mode, parse_output_mode
 
 
 APP_DIR_NAME = "VRTreadmill"
@@ -19,6 +20,8 @@ SETTINGS_FILE_NAME = "settings.json"
 class AppSettings:
     start_with_windows: bool = False
     start_minimized: bool = False
+    output_mode: OutputMode = OutputMode.OPENXR
+    openxr_filter_mode: OpenXrFilterMode = OpenXrFilterMode.BALANCED
     treadmill: TreadmillConfig = field(default_factory=TreadmillConfig)
 
 
@@ -46,6 +49,8 @@ def load_settings(path: Path | None = None) -> AppSettings:
     return AppSettings(
         start_with_windows=_bool(raw.get("start_with_windows"), defaults.start_with_windows),
         start_minimized=_bool(raw.get("start_minimized"), defaults.start_minimized),
+        output_mode=_output_mode(raw.get("output_mode"), defaults.output_mode),
+        openxr_filter_mode=_openxr_filter_mode(raw.get("openxr_filter_mode"), defaults.openxr_filter_mode),
         treadmill=TreadmillConfig(
             sensitivity=_float(treadmill_raw.get("sensitivity"), defaults.treadmill.sensitivity),
             decay=_float(treadmill_raw.get("decay"), defaults.treadmill.decay),
@@ -94,4 +99,22 @@ def _int(value: Any, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return default
+
+
+def _output_mode(value: Any, default: OutputMode) -> OutputMode:
+    if not isinstance(value, str):
+        return default
+    try:
+        return parse_output_mode(value)
+    except ValueError:
+        return default
+
+
+def _openxr_filter_mode(value: Any, default: OpenXrFilterMode) -> OpenXrFilterMode:
+    if not isinstance(value, str):
+        return default
+    try:
+        return parse_openxr_filter_mode(value)
+    except ValueError:
         return default

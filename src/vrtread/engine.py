@@ -5,6 +5,9 @@ import platform
 import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
+
+from .outputs import OutputConfig, TreadmillOutput, TreadmillVector, create_output, now_ms
 
 
 @dataclass(slots=True)
@@ -21,18 +24,27 @@ class TreadmillStatus:
     stick_y: float
     pending_delta_y: float
     last_error: str | None
+    output_mode: str
+    openxr_filter_mode: str
 
 
 class TreadmillEngine:
-    def __init__(self, config: TreadmillConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: TreadmillConfig | None = None,
+        output_config: OutputConfig | None = None,
+        output_factory: Callable[[OutputConfig], TreadmillOutput] = create_output,
+    ) -> None:
         self._config = config or TreadmillConfig()
+        self._output_config = output_config or OutputConfig()
+        self._output_factory = output_factory
         self._delta_y = 0.0
         self._delta_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._listener = None
-        self._gamepad = None
+        self._output: TreadmillOutput | None = None
         self._stick_y = 0.0
         self._last_error: str | None = None
         self._center_x = 0
@@ -56,9 +68,11 @@ class TreadmillEngine:
                 stick_y=self._stick_y,
                 pending_delta_y=pending_delta_y,
                 last_error=self._last_error,
+                output_mode=self._output_config.mode.value,
+                openxr_filter_mode=self._output_config.openxr_filter_mode.value,
             )
 
-    def start(self, config: TreadmillConfig | None = None) -> None:
+    def start(self, config: TreadmillConfig | None = None, output_config: OutputConfig | None = None) -> None:
         if self.is_running:
             raise RuntimeError("The treadmill engine is already running.")
         if platform.system() != "Windows" or self._user32 is None:
@@ -66,36 +80,43 @@ class TreadmillEngine:
 
         if config is not None:
             self._config = config
+        if output_config is not None:
+            self._output_config = output_config
         self._validate_config(self._config)
 
         try:
             from pynput import mouse
-            import vgamepad as vg
         except Exception as exc:
-            raise RuntimeError(f"Could not import required input/gamepad packages: {exc}") from exc
+            raise RuntimeError(f"Could not import required mouse capture package: {exc}") from exc
 
-        try:
-            self._gamepad = vg.VX360Gamepad()
-        except Exception as exc:
-            raise RuntimeError(
-                "Could not create a virtual Xbox 360 controller. "
-                "Confirm ViGEmBus is installed and running."
-            ) from exc
-
-        self._center_x = self._user32.GetSystemMetrics(0) // 2
-        self._center_y = self._user32.GetSystemMetrics(1) // 2
         self._stick_y = 0.0
         self._last_error = None
         self._stop_event.clear()
         with self._delta_lock:
             self._delta_y = 0.0
 
-        self._user32.SetCursorPos(self._center_x, self._center_y)
-        self._listener = mouse.Listener(on_move=self._on_move)
-        self._listener.start()
+        output = self._output_factory(self._output_config)
+        try:
+            output.start()
+            self._output = output
 
-        self._thread = threading.Thread(target=self._run, name="vrtread-engine", daemon=True)
-        self._thread.start()
+            self._center_x = self._user32.GetSystemMetrics(0) // 2
+            self._center_y = self._user32.GetSystemMetrics(1) // 2
+            self._user32.SetCursorPos(self._center_x, self._center_y)
+            self._listener = mouse.Listener(on_move=self._on_move)
+            self._listener.start()
+
+            self._thread = threading.Thread(target=self._run, name="vrtread-engine", daemon=True)
+            self._thread.start()
+        except Exception:
+            self._stop_event.set()
+            listener = self._listener
+            if listener is not None:
+                listener.stop()
+                self._listener = None
+            output.close()
+            self._output = None
+            raise
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -112,11 +133,15 @@ class TreadmillEngine:
         with self._state_lock:
             self._stick_y = 0.0
         self._thread = None
-        self._gamepad = None
 
     def update_config(self, config: TreadmillConfig) -> None:
         self._validate_config(config)
         self._config = config
+
+    def update_output_config(self, output_config: OutputConfig) -> None:
+        if self.is_running and output_config.mode != self._output_config.mode:
+            raise RuntimeError("Stop capture before changing output mode.")
+        self._output_config = output_config
 
     def _on_move(self, x: int, y: int) -> None:
         if self._stop_event.is_set() or self._user32 is None:
@@ -146,12 +171,19 @@ class TreadmillEngine:
                 current = self._stick_y * config.decay + target
                 current = max(-1.0, min(1.0, current))
 
-                gamepad = self._gamepad
-                if gamepad is None:
-                    raise RuntimeError("Virtual gamepad is not available.")
+                output = self._output
+                if output is None:
+                    raise RuntimeError("Treadmill output is not available.")
 
-                gamepad.left_joystick_float(x_value_float=0.0, y_value_float=current)
-                gamepad.update()
+                output.update(
+                    TreadmillVector(
+                        x=0.0,
+                        y=current,
+                        active=True,
+                        timestamp_ms=now_ms(),
+                        openxr_filter_mode=self._output_config.openxr_filter_mode,
+                    )
+                )
 
                 with self._state_lock:
                     self._stick_y = current
@@ -161,17 +193,17 @@ class TreadmillEngine:
             with self._state_lock:
                 self._last_error = str(exc)
         finally:
-            self._reset_gamepad()
+            self._reset_output()
             self._end_timer_precision()
 
-    def _reset_gamepad(self) -> None:
-        gamepad = self._gamepad
-        if gamepad is None:
+    def _reset_output(self) -> None:
+        output = self._output
+        if output is None:
             return
         try:
-            gamepad.reset()
-            gamepad.update()
+            output.close()
         finally:
+            self._output = None
             with self._state_lock:
                 self._stick_y = 0.0
 
@@ -197,4 +229,3 @@ class TreadmillEngine:
             raise ValueError("Deadzone must be 0 or greater.")
         if config.update_hz <= 0:
             raise ValueError("Update rate must be greater than 0.")
-
