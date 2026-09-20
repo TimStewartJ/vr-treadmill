@@ -95,6 +95,23 @@ def test_pack_layout_and_sanitising() -> None:
         assert packed["flags"] == 0
 
 
+@windows_only
+def test_timestamp_clock_is_the_full_64_bit_tick_count() -> None:
+    import ctypes
+
+    # The layer compares against the real 64-bit GetTickCount64. A 32-bit return type here works for the first
+    # 24.8 days of uptime and then silently breaks OpenXR output until the next reboot.
+    assert outputs._get_tick_count_64.restype is ctypes.c_uint64
+    reference = ctypes.WinDLL("kernel32").GetTickCount64
+    reference.restype = ctypes.c_uint64
+    assert abs(now_ms() - reference()) < 1000
+    assert now_ms() >= 0
+
+    beyond_32_bits = (1 << 32) + 12345  # 49.7 days of uptime and counting
+    block = unpack(pack_openxr_state(2, TreadmillVector(0.0, 0.0, True, beyond_32_bits), OutputConfig(), 1))
+    assert block["timestamp"] == beyond_32_bits
+
+
 def test_create_output_modes() -> None:
     assert isinstance(create_output(OutputConfig(mode=OutputMode.XBOX)), VGamepadOutput)
     assert isinstance(create_output(OutputConfig(mode=OutputMode.OPENXR)), OpenXrSharedMemoryOutput)

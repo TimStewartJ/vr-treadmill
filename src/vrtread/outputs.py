@@ -99,10 +99,25 @@ _COMBINE_MODE_VALUES = {
 assert OPENXR_STRUCT_SIZE == 64, "OpenXR shared state must match the 64-byte C++ SharedState"
 
 
+def _bind_tick_count():
+    if platform.system() != "Windows":
+        return None
+    function = ctypes.WinDLL("kernel32").GetTickCount64
+    # ctypes assumes a 32-bit int return value. Left like that, the timestamp goes negative once the PC has
+    # been up for 24.8 days; the layer (which reads the real 64-bit counter) then sees every block as coming
+    # from the future and ignores the treadmill until the next reboot.
+    function.restype = ctypes.c_uint64
+    function.argtypes = []
+    return function
+
+
+_get_tick_count_64 = _bind_tick_count()
+
+
 def now_ms() -> int:
     """Same clock the layer uses for its staleness check (GetTickCount64)."""
-    if platform.system() == "Windows":
-        return int(ctypes.windll.kernel32.GetTickCount64())
+    if _get_tick_count_64 is not None:
+        return int(_get_tick_count_64())
     return int(time.monotonic() * 1000)
 
 
@@ -280,9 +295,10 @@ class OpenXrSharedMemoryOutput:
 
         odd_seq = self._seq + 1
         even_seq = self._seq + 2
+        # Build the payload first: everything between the two seq writes is time in which readers must wait.
+        payload = pack_openxr_state(odd_seq, vector, self._config, self._pid)
         # Seqlock: readers ignore the block while seq is odd and re-check seq after copying.
         struct.pack_into("<Q", buffer, OPENXR_SEQ_OFFSET, odd_seq)
-        payload = pack_openxr_state(odd_seq, vector, self._config, self._pid)
         ctypes.memmove(ctypes.addressof(buffer), payload, OPENXR_STRUCT_SIZE)
         struct.pack_into("<Q", buffer, OPENXR_SEQ_OFFSET, even_seq)
         self._seq = even_seq

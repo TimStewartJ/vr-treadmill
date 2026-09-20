@@ -3,10 +3,12 @@
 //   vrtread_layer_tests.exe [--filter <substring>]
 //       Runs the native test suite. The exe publishes treadmill state itself.
 //
-//   vrtread_layer_tests.exe --probe --mapping <name> [--frames N] [--interval-ms M] [--log-dir DIR]
+//   vrtread_layer_tests.exe --probe --mapping <name> [--frames N] [--interval-ms M] [--log-dir DIR] [--implicit]
 //       Cross-language mode, driven by tests/test_native_e2e.py. Something else (the real Python app code)
 //       publishes to <name>; this process plays a Unity-style and an Unreal-style game through the real
 //       loader + layer + mock runtime and prints what each game read, one JSON object per frame.
+//       With --implicit the layer is NOT handed to the loader: like a real game, the loader has to discover
+//       it through the registry. The first output line reports which layer DLL (if any) got loaded.
 
 #include "harness.h"
 
@@ -30,8 +32,31 @@ std::string make_temp_dir(const char* prefix) {
     return dir;
 }
 
-int run_probe(int frames, int interval_ms) {
-    configure_loader_environment();
+std::string json_escape(const std::string& value) {
+    std::string out;
+    for (const char ch : value) {
+        if (ch == '\\' || ch == '"') {
+            out.push_back('\\');
+        }
+        out.push_back(ch);
+    }
+    return out;
+}
+
+int run_probe(int frames, int interval_ms, bool implicit, bool simulate_wow64) {
+    if (simulate_wow64) {
+        // What Windows does for every 32-bit process. It has to be set from inside: Windows strips this
+        // variable from the environment block of any 64-bit process at creation, so a parent cannot pass it.
+        set_env("PROCESSOR_ARCHITEW6432", "AMD64");
+    }
+    if (implicit) {
+        // Only the runtime is ours. Layer discovery is left entirely to the loader and the registry.
+        set_env("XR_RUNTIME_JSON", VRTREAD_TEST_RUNTIME_JSON);
+        set_env("XR_API_LAYER_PATH", nullptr);
+        set_env("XR_ENABLE_API_LAYERS", nullptr);
+    } else {
+        configure_loader_environment();
+    }
     MockRuntime::get().reset();
     MockRuntime::get().set_thumbstick(kLeftHand, 0.25F, 0.0F);
     MockRuntime::get().set_thumbstick(kRightHand, 0.5F, 0.125F);
@@ -51,6 +76,12 @@ int run_probe(int frames, int interval_ms) {
                                     {forward, "/user/hand/left/input/thumbstick/y"},
                                 });
     game.attach({unity_set, unreal_set});
+
+    char loaded_layer[MAX_PATH]{};
+    if (const HMODULE module = GetModuleHandleA("vrtread_openxr_layer.dll")) {
+        GetModuleFileNameA(module, loaded_layer, MAX_PATH);
+    }
+    std::printf("{\"layer_dll\":\"%s\"}\n", json_escape(loaded_layer).c_str());
 
     for (int frame = 0; frame < frames; ++frame) {
         if (game.sync({unity_set, unreal_set}) != XR_SUCCESS) {
@@ -77,6 +108,8 @@ int main(int argc, char** argv) {
     std::string mapping;
     std::string log_dir;
     bool probe = false;
+    bool implicit = false;
+    bool simulate_wow64 = false;
     int frames = 30;
     int interval_ms = 10;
     for (int index = 1; index < argc; ++index) {
@@ -86,6 +119,10 @@ int main(int argc, char** argv) {
             filter = value();
         } else if (arg == "--probe") {
             probe = true;
+        } else if (arg == "--implicit") {
+            implicit = true;
+        } else if (arg == "--simulate-wow64") {
+            simulate_wow64 = true;
         } else if (arg == "--mapping") {
             mapping = value();
         } else if (arg == "--frames") {
@@ -115,7 +152,7 @@ int main(int argc, char** argv) {
         set_env(vrtread::kMappingNameEnvVar, mapping.c_str());
 
         if (probe) {
-            return run_probe(frames, interval_ms);
+            return run_probe(frames, interval_ms, implicit, simulate_wow64);
         }
 
         std::printf("layer under test : %s\n", layer_dll_path().c_str());

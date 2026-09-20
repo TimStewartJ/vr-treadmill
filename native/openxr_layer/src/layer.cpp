@@ -263,7 +263,11 @@ public:
 
         vrtread::SharedState block{};
         bool consistent = false;
-        for (int attempt = 0; attempt < 4 && !consistent; ++attempt) {
+        // Steady state: a few quick tries, then fall back to the previous block. The very first read has no
+        // previous block, so without patience a game session that starts while the app is mid-update would
+        // not see the treadmill on its first frame. Bounded spin (~100 us worst case), first read only.
+        const int max_attempts = have_last_good_ ? 4 : 4000;
+        for (int attempt = 0; attempt < max_attempts && !consistent; ++attempt) {
             // `volatile` forces two real loads of seq around the copy; without it the optimizer may fold them.
             const volatile uint64_t* seq = &static_cast<const vrtread::SharedState*>(view_)->seq;
             const uint64_t before = *seq;
@@ -279,7 +283,7 @@ public:
             last_good_ = block;
             have_last_good_ = true;
         } else if (have_last_good_) {
-            // Lost the race with the writer four times in a row. Re-use the previous block instead of
+            // Lost the race with the writer several times in a row. Re-use the previous block instead of
             // dropping to "no treadmill" for a frame; its timestamp still has to pass the staleness check.
             block = last_good_;
         } else {

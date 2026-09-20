@@ -44,12 +44,18 @@ def run_probe(mapping: str, tmp_path: Path, frames: int, interval_ms: int) -> su
     )
 
 
+BUILT_LAYER = REPO / "native" / "openxr_layer" / "bin" / "vrtread_openxr_layer.dll"
+
+
 def frames_of(process: subprocess.Popen) -> list[dict]:
     stdout, stderr = process.communicate(timeout=60)
     assert process.returncode == 0, f"probe failed ({process.returncode}):\n{stdout}\n{stderr}"
-    frames = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
-    assert frames and "error" not in frames[0], stdout
-    return frames
+    records = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+    assert records and not any("error" in record for record in records), stdout
+    # Every result below is only meaningful if the loader really loaded the DLL that was just built.
+    loaded = [record["layer_dll"] for record in records if "layer_dll" in record]
+    assert loaded and Path(loaded[0]).resolve() == BUILT_LAYER.resolve(), loaded
+    return [record for record in records if "frame" in record]
 
 
 def test_python_publisher_drives_only_the_left_hand_in_the_game(tmp_path: Path) -> None:
@@ -99,8 +105,10 @@ class LiveProbe:
         assert self.process.stdout is not None
         for line in self.process.stdout:
             if line.startswith("{"):
-                with self._lock:
-                    self.frames.append(json.loads(line))
+                record = json.loads(line)
+                if "frame" in record or "error" in record:
+                    with self._lock:
+                        self.frames.append(record)
 
     def count(self, predicate) -> int:
         with self._lock:

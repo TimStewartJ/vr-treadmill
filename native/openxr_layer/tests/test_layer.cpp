@@ -793,6 +793,38 @@ TEST(layer_threads_hammering_the_input_system) {
     CHECK(reads.load() > 1000U);
 }
 
+TEST(layer_first_read_of_a_session_is_not_lost_to_a_busy_writer) {
+    // A game's very first read has no earlier block to fall back on. If it lands while the app is mid-update
+    // (seq odd) the player would not move on that frame. Make that collision as likely as possible: a writer
+    // that does nothing but publish, against many fresh game sessions (each one reloads the layer DLL).
+    reset_world();
+    std::atomic<bool> stop{false};
+    std::thread writer([&] {
+        while (!stop.load()) {
+            publisher().publish(0.5F);
+        }
+    });
+
+    int missed = 0;
+    constexpr int kSessions = 150;
+    for (int index = 0; index < kSessions; ++index) {
+        Game game("FirstReadGame", "Custom");
+        REQUIRE_XR(game.create_result);
+        const XrActionSet set = game.create_set("gameplay");
+        const XrAction move = game.create_action(set, "move", XR_ACTION_TYPE_VECTOR2F_INPUT);
+        game.suggest(kTouchProfile, {{move, "/user/hand/left/input/thumbstick"}});
+        game.attach({set});
+        REQUIRE_XR(game.sync({set}));
+        if (!testing::approx(game.vec2(move).currentState.y, 0.5)) {
+            ++missed;
+        }
+    }
+    stop = true;
+    writer.join();
+    std::printf("    %d of %d sessions missed their first read\n", missed, kSessions);
+    CHECK(missed == 0);
+}
+
 TEST(layer_overhead_is_negligible) {
     reset_world();
     Game game("PerfGame", "Unity");
